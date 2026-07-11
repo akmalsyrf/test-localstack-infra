@@ -1,11 +1,11 @@
 name: Terraform LocalStack
 
-# Architecture:
-#   Git push → GitHub Actions → Kind + LocalStack (Docker) + Terraform CLI
-#                            → local terraform.tfstate (default; reliable with LocalStack)
-#                            → optional S3+DynamoDB on LocalStack (BACKEND=s3)
-#                            → optional Terraform Cloud (set BACKEND=cloud + secret; execution_mode=local)
-#                            → LocalStack APIs (localhost:4566) + Kind (EKS_K8S_PROVIDER=local)
+# CI sequencing (avoids Kind+LocalStack Docker/CPU contention on small runners):
+#   1) LocalStack alone + latency smoke
+#   2) Terraform shared → network → backend  (no Kind)
+#   3) Kind (+ metrics-server) + latency smoke again
+#   4) Terraform eks + verify-apply
+# Local `./scripts/up.sh` still starts Kind then LocalStack for one-command DX.
 
 on:
   pull_request:
@@ -41,8 +41,12 @@ env:
   AWS_ACCESS_KEY_ID: test
   AWS_SECRET_ACCESS_KEY: test
   AWS_DEFAULT_REGION: ap-southeast-3
+  AWS_EC2_METADATA_DISABLED: "true"
   TFC_ORG: ExperimentTerraform
   BACKEND: local
+  # Lambda invoke smoke tests need the docker executor; Kind is deferred (below)
+  # so both are not contending during shared/network/backend.
+  LAMBDA_RUNTIME_EXECUTOR: docker
 
 jobs:
   static-analysis:
@@ -125,16 +129,6 @@ jobs:
         with:
           version: "v1.29.14"
 
-      - name: Start Kind + LocalStack
-        run: |
-          chmod +x scripts/*.sh
-          ./scripts/up.sh
-          curl -sf http://localhost:4566/_localstack/health | tee /tmp/ls-health.json
-          echo
-          echo "LocalStack is healthy (bound to job network only; not published to the internet)."
-          kind get clusters
-          kubectl --kubeconfig .kube/kind-config get nodes
-
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -155,13 +149,83 @@ jobs:
             echo "action=apply" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Terraform ${{ steps.meta.outputs.action }}
+      - name: Start LocalStack (no Kind yet)
+        timeout-minutes: 5
         run: |
           chmod +x scripts/*.sh
-          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" "${{ steps.meta.outputs.action }}"
+          # Kind-independent stacks must not share the runner with a 3-node Kind cluster.
+          SKIP_KIND=1 ./scripts/up.sh
+          curl -sf http://localhost:4566/_localstack/health | tee /tmp/ls-health.json
+          echo
+          echo "LocalStack is healthy (Kind deferred until eks stage)."
+
+      - name: LocalStack latency smoke (pre-Kind)
+        timeout-minutes: 2
+        run: ./scripts/check-localstack-latency.sh 5
+
+      - name: Terraform ${{ steps.meta.outputs.action }} (shared,network,backend)
+        if: steps.meta.outputs.action != 'destroy'
+        timeout-minutes: 20
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" "${{ steps.meta.outputs.action }}" shared,network,backend
+
+      - name: Start Kind (before eks only)
+        timeout-minutes: 15
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/kind-up.sh
+          # Bridge LocalStack onto the Kind Docker network for in-cluster SQS/SNS.
+          docker network connect kind testinfra-localstack 2>/dev/null || true
+          LS_IP="$(docker inspect -f '{{ (index .NetworkSettings.Networks "kind").IPAddress }}' testinfra-localstack 2>/dev/null || true)"
+          echo "LocalStack on kind network: ${LS_IP:-unknown}"
+          kind get clusters
+          kubectl --kubeconfig .kube/kind-config get nodes
+
+      - name: LocalStack latency smoke (post-Kind)
+        timeout-minutes: 2
+        run: ./scripts/check-localstack-latency.sh 5
+
+      - name: Terraform ${{ steps.meta.outputs.action }} (eks)
+        if: steps.meta.outputs.action != 'destroy'
+        timeout-minutes: 25
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" "${{ steps.meta.outputs.action }}" eks
+
+      - name: Verify apply
+        if: steps.meta.outputs.action == 'apply'
+        timeout-minutes: 15
+        run: ./scripts/verify-apply.sh "${{ steps.meta.outputs.environment }}"
+
+      # Destroy needs Kind for eks first, then Kind-independent stacks (env.sh reverses order).
+      - name: Terraform destroy (eks → backend → network → shared)
+        if: steps.meta.outputs.action == 'destroy'
+        timeout-minutes: 30
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" destroy
+
+      - name: Diagnostics (on failure)
+        if: failure()
+        timeout-minutes: 5
+        run: |
+          echo "==> LocalStack health"
+          curl -sf http://localhost:4566/_localstack/health || true
+          echo
+          echo "==> Docker stats (top)"
+          docker stats --no-stream || true
+          echo "==> LocalStack logs (tail)"
+          docker compose logs --tail=120 || true
+          echo "==> Kind nodes (if any)"
+          kind get clusters || true
+          kubectl --kubeconfig .kube/kind-config get nodes -o wide 2>/dev/null || true
+          kubectl --kubeconfig .kube/kind-config get pods -A 2>/dev/null || true
 
       - name: Stop Kind + LocalStack
         if: always()
+        timeout-minutes: 5
         run: |
           docker compose down -v || true
+          # No-op safe if Kind never started (failed before eks stage).
           ./scripts/kind-down.sh || true

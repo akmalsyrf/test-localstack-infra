@@ -1,6 +1,12 @@
 resource "aws_s3_bucket" "this" {
   bucket = var.bucket
   tags   = var.tags
+
+  # Fail fast under LocalStack/Docker contention instead of hanging to the job cutoff.
+  timeouts {
+    create = "3m"
+    delete = "3m"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "this" {

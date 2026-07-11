@@ -12,6 +12,11 @@ resource "aws_sqs_queue" "standard_dlq" {
   message_retention_seconds = 1209600 # 14 days
   sqs_managed_sse_enabled   = true
 
+  timeouts {
+    create = "3m"
+    delete = "3m"
+  }
+
   depends_on = [aws_sns_topic.unified]
 }
 
@@ -27,6 +32,11 @@ resource "aws_sqs_queue" "standard" {
     maxReceiveCount     = 5
   })
 
+  timeouts {
+    create = "3m"
+    delete = "3m"
+  }
+
   depends_on = [aws_sqs_queue.standard_dlq]
 }
 
@@ -37,6 +47,11 @@ resource "aws_sqs_queue" "fifo" {
   message_retention_seconds   = 18400
   visibility_timeout_seconds  = 560
   sqs_managed_sse_enabled     = true
+
+  timeouts {
+    create = "3m"
+    delete = "3m"
+  }
 
   depends_on = [aws_sqs_queue.standard]
 }

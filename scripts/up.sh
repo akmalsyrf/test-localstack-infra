@@ -20,10 +20,12 @@ if [[ "$SKIP_KIND" != "1" ]]; then
   echo "==> Ensuring Kind cluster (LocalStack EKS backend)..."
   "$ROOT/scripts/kind-up.sh"
 else
-  echo "==> SKIP_KIND=1 — expecting an existing kubeconfig at .kube/kind-config.localstack"
+  # CI: start LocalStack alone so shared/network/backend apply without Kind
+  # contending for Docker/CPU. Call kind-up.sh later, before the eks stack.
+  echo "==> SKIP_KIND=1 — LocalStack only (Kind deferred)"
   if [[ ! -f "$ROOT/.kube/kind-config.localstack" ]]; then
     mkdir -p "$ROOT/.kube"
-    # Placeholder so compose volume mount succeeds; EKS calls will fail until Kind is up.
+    # Placeholder so compose volume mount succeeds; replace when kind-up.sh runs.
     printf '%s\n' "apiVersion: v1" "kind: Config" "clusters: []" "contexts: []" "users: []" \
       > "$ROOT/.kube/kind-config.localstack"
   fi

@@ -174,11 +174,11 @@ resource "kubernetes_secret_v1" "localstack_creds" {
   }
 
   data = {
-    AWS_ACCESS_KEY_ID     = "test"
-    AWS_SECRET_ACCESS_KEY = "test"
+    AWS_ACCESS_KEY_ID      = "test"
+    AWS_SECRET_ACCESS_KEY  = "test"
     AWS_DEFAULT_REGION     = var.aws_region
-    AWS_REGION            = var.aws_region
-    AWS_ENDPOINT_URL      = local.localstack_base_url
+    AWS_REGION             = var.aws_region
+    AWS_ENDPOINT_URL       = local.localstack_base_url
     SQS_STANDARD_QUEUE_URL = local.sqs_standard_url_incluster
     SQS_FIFO_QUEUE_URL     = local.sqs_fifo_url_incluster
     SNS_TOPIC_ARN          = var.sns_topic_arn
@@ -300,6 +300,13 @@ resource "kubernetes_deployment_v1" "sample" {
     kubernetes_limit_range_v1.app,
     kubernetes_endpoints_v1.localstack,
   ]
+
+  # Fail fast if Kind is unhealthy / pods never become Ready (CI hung waiters).
+  timeouts {
+    create = "5m"
+    update = "5m"
+    delete = "5m"
+  }
 }
 
 resource "kubernetes_pod_disruption_budget_v1" "sample" {

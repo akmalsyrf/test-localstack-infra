@@ -4,7 +4,9 @@ Sample infrastructure on **LocalStack (free)** with Terraform, split into **shar
 
 **Kind** provides a real local Kubernetes control plane that **mirrors** LocalStack/AWS EKS Terraform (IAM roles, cluster/node-group naming, sample workloads). LocalStack community does **not** expose the EKS API (Pro-only), so `aws_eks_*` is not called — Kind + matching outputs stand in.
 
-**CI architecture (default)**
+**CI architecture (default)** — Kind is deferred until the `eks` stack so early
+stacks are not starved by Kind+LocalStack Docker contention on small runners
+([details](docs/FIX_CI_HANG_V2_S3_CONTENTION.md)):
 
 ```
 Git Push
@@ -13,9 +15,10 @@ Git Push
 GitHub Actions
    │
    ├── tflint + checkov (static analysis)
-   ├── Kind cluster (testinfra-eks)
-   ├── LocalStack (Docker Compose)
-   └── Terraform CLI (plan/apply) + local terraform.tfstate
+   ├── LocalStack (Docker Compose) + latency smoke
+   ├── Terraform: shared → network → backend
+   ├── Kind cluster (testinfra-eks) + latency smoke
+   └── Terraform: eks + verify-apply
            │
            ▼
       LocalStack (:4566)  +  Kind API / NodePort :30080
@@ -23,11 +26,10 @@ GitHub Actions
 
 ```mermaid
 flowchart LR
-  CI[GitHub Actions] --> Kind[Kind]
-  CI --> LS[LocalStack]
-  CI --> TF[Terraform]
-  TF --> LS
-  TF --> Kind
+  CI[GitHub Actions] --> LS[LocalStack]
+  LS --> Early[shared / network / backend]
+  Early --> Kind[Kind]
+  Kind --> EKS[eks apply]
 ```
 
 Optional remote state:
@@ -86,7 +88,9 @@ Workflow file: [`.github/workflows/terraform.yml`](.github/workflows/terraform.y
 | Doc | Contents |
 |---|---|
 | [docs/STEP_BY_STEP.md](docs/STEP_BY_STEP.md) | Local & CI apply/destroy, optional TFC, troubleshooting |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Flowcharts, Kind↔EKS mirror, production-readiness notes |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Flowcharts, Kind↔EKS mirror, CI Kind-deferred sequencing |
+| [docs/FIX_CI_HANG_V2_S3_CONTENTION.md](docs/FIX_CI_HANG_V2_S3_CONTENTION.md) | Root cause: defer Kind until eks |
+| [docs/FIX_CI_TIMEOUT_HANG.md](docs/FIX_CI_TIMEOUT_HANG.md) | Containment: timeouts + diagnostics |
 
 ## Layout
 

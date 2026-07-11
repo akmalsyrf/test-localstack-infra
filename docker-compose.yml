@@ -16,6 +16,9 @@ services:
       - DISABLE_CORS_CHECKS=1
       - LOCALSTACK_HOST=localhost
       - LAMBDA_RUNTIME_EXECUTOR=docker
+      # Docker executor is required for Lambda invoke smoke tests in this repo.
+      # It shares the host Docker daemon with Kind (DinD); CI therefore starts
+      # Kind only before the eks stack — see .github/workflows/terraform.yml and
       - LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=60
       - DOCKER_HOST=unix:///var/run/docker.sock
     extra_hosts:

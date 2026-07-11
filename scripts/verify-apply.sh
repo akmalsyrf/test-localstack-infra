@@ -137,6 +137,23 @@ else
   exit 1
 fi
 
+section "LocalStack responsiveness"
+LATENCY_MAX="${LOCALSTACK_LATENCY_MAX_SECONDS:-5}"
+START_LS="$(date +%s)"
+set +e
+timeout 10 aws --endpoint-url="$ENDPOINT" --region "$REGION" s3 ls >/dev/null 2>&1
+LS_RC=$?
+set -e
+LS_ELAPSED=$(( $(date +%s) - START_LS ))
+echo "LocalStack s3 ls took ${LS_ELAPSED}s (budget ${LATENCY_MAX}s)"
+if [[ "$LS_RC" -ne 0 ]]; then
+  fail "LocalStack s3 ls failed (exit $LS_RC) after ${LS_ELAPSED}s — Docker/LocalStack may be wedged"
+elif [[ "$LS_ELAPSED" -gt "$LATENCY_MAX" ]]; then
+  fail "LocalStack responded slowly (${LS_ELAPSED}s > ${LATENCY_MAX}s) — likely CPU/Docker contention"
+else
+  ok "LocalStack s3 ls within ${LATENCY_MAX}s (${LS_ELAPSED}s)"
+fi
+
 # --- collect terraform outputs -----------------------------------------------
 
 section "Terraform outputs"

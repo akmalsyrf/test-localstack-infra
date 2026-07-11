@@ -4,17 +4,49 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV="${1:-}"
 ACTION="${2:-apply}" # apply | destroy | plan
+# Optional comma-separated stack filter, e.g. shared,network,backend or eks.
+# Default: all stacks in order. Used by CI to apply Kind-independent stacks
+# before Kind starts (see .github/workflows/terraform.yml).
+STACK_FILTER="${3:-}"
 
 if [[ -z "$ENV" || ! -d "$ROOT/terraform/live/$ENV" ]]; then
-  echo "Usage: $0 <dev|staging> [apply|destroy|plan]" >&2
+  echo "Usage: $0 <dev|staging> [apply|destroy|plan] [stack1,stack2,...]" >&2
   exit 1
 fi
 
 "$ROOT/scripts/sync-live.sh"
 
 LIVE="$ROOT/terraform/live/$ENV"
-# Apply order: shared → network → backend → eks (EKS needs VPC/subnets)
-STACKS=(shared network backend eks)
+# Apply order: shared → network → backend → eks (EKS needs VPC/subnets + Kind)
+ALL_STACKS=(shared network backend eks)
+
+filter_stacks() {
+  local filter="$1"
+  local s f
+  local -a out=()
+  if [[ -z "$filter" ]]; then
+    STACKS=("${ALL_STACKS[@]}")
+    return
+  fi
+  IFS=',' read -r -a wanted <<< "$filter"
+  for s in "${ALL_STACKS[@]}"; do
+    for f in "${wanted[@]}"; do
+      f="$(echo "$f" | tr -d '[:space:]')"
+      if [[ "$s" == "$f" ]]; then
+        out+=("$s")
+        break
+      fi
+    done
+  done
+  if [[ "${#out[@]}" -eq 0 ]]; then
+    echo "No valid stacks in filter '$filter' (allowed: ${ALL_STACKS[*]})" >&2
+    exit 1
+  fi
+  STACKS=("${out[@]}")
+}
+
+filter_stacks "$STACK_FILTER"
+echo "==> Stacks: ${STACKS[*]}"
 
 uses_tfc_cloud() {
   grep -q 'cloud {' "$LIVE/shared/versions.tf" 2>/dev/null
@@ -110,6 +142,15 @@ ensure_upstream_state_for_plan() {
   esac
 }
 
+includes_stack() {
+  local needle="$1"
+  local s
+  for s in "${STACKS[@]}"; do
+    [[ "$s" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
 if uses_tfc_cloud; then
   if [[ -z "${TF_TOKEN_app_terraform_io:-${TFE_TOKEN:-}}" ]]; then
     echo "TFC cloud backend requires TF_TOKEN_app_terraform_io." >&2
@@ -145,14 +186,22 @@ case "$ACTION" in
     for stack in "${STACKS[@]}"; do
       apply_stack "$stack"
     done
-    echo ""
-    echo "==> Outputs ($ENV/backend):"
-    terraform -chdir="$LIVE/backend" output || true
-    echo ""
-    echo "==> Outputs ($ENV/eks):"
-    terraform -chdir="$LIVE/eks" output || true
-    echo ""
-    "$ROOT/scripts/verify-apply.sh" "$ENV"
+    if includes_stack backend; then
+      echo ""
+      echo "==> Outputs ($ENV/backend):"
+      terraform -chdir="$LIVE/backend" output || true
+    fi
+    if includes_stack eks; then
+      echo ""
+      echo "==> Outputs ($ENV/eks):"
+      terraform -chdir="$LIVE/eks" output || true
+    fi
+    # Full verify only when the default all-stacks path ran (local convenience).
+    # CI runs verify as a separate step after Kind + eks.
+    if [[ -z "$STACK_FILTER" ]]; then
+      echo ""
+      "$ROOT/scripts/verify-apply.sh" "$ENV"
+    fi
     ;;
   destroy)
     for ((i=${#STACKS[@]}-1; i>=0; i--)); do

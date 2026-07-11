@@ -2,34 +2,62 @@
 
 ## Runtime flow (local / GitHub Actions)
 
+### Local (one-command DX)
+
+`./scripts/up.sh` still starts **Kind first**, then LocalStack, then bridges
+networks — fine on a laptop with enough CPU/RAM.
+
+### CI sequencing (Kind deferred) {#ci-sequencing-kind-deferred}
+
+On small GitHub-hosted runners, Kind (3 nodes + metrics-server) and LocalStack
+(`LAMBDA_RUNTIME_EXECUTOR=docker` → host `docker.sock`) contend for the same
+Docker daemon and CPU. That starvation made even `aws_s3_bucket` hang for nearly
+an hour during the first stack. CI therefore:
+
+1. Start **LocalStack alone** (`SKIP_KIND=1 ./scripts/up.sh`) + latency smoke  
+2. Terraform **shared → network → backend** (no Kind)  
+3. Start **Kind** + bridge LocalStack onto the `kind` network + latency smoke  
+4. Terraform **eks** + `verify-apply.sh`
+
+Root-cause write-up: [FIX_CI_HANG_V2_S3_CONTENTION.md](./FIX_CI_HANG_V2_S3_CONTENTION.md).  
+Containment (resource/step timeouts, diagnostics): [FIX_CI_TIMEOUT_HANG.md](./FIX_CI_TIMEOUT_HANG.md).
+
 ```mermaid
 flowchart TD
-  A[Git push / PR / workflow_dispatch<br/>or local ./scripts/up.sh] --> B[Kind cluster<br/>testinfra-eks]
-  A --> C[LocalStack container<br/>:4566]
-  E[Terraform CLI<br/>shared → network → backend → eks] --> C
-  E -->|kubernetes provider + IAM| B
-  E -->|aws_* APIs| C
+  A[GitHub Actions] --> L[LocalStack only]
+  L --> S[Terraform shared / network / backend]
+  S --> K[Kind + metrics-server]
+  K --> E[Terraform eks]
+  E --> V[verify-apply.sh]
 ```
 
 ```
-                    Git Push / PR / workflow_dispatch  (or local scripts)
+                    GitHub Actions (CI)
                                    │
-                 ┌─────────────────┴─────────────────┐
-                 ▼                                   ▼
+                                   ▼
+                         docker compose up  (LocalStack alone)
+                                   │
+                         latency smoke (s3 ls < 5s)
+                                   │
+              Terraform: shared → network → backend
+                                   │
+                         kind-up.sh + network connect
+                                   │
+                         latency smoke again
+                                   │
+                         Terraform: eks → verify
+```
+
+Local `./scripts/up.sh` flow (unchanged convenience):
+
+```
         kind create cluster                 docker compose up
         (testinfra-eks)                     (LocalStack free)
                  │                                   │
-                 │  .kube/kind-config                │
-                 │  (host kubectl / TF k8s)          │
                  └─────────────────┬─────────────────┘
                                    ▼
-                         Terraform CLI (local tfstate by default)
+                         Terraform CLI (all stacks)
               shared → network → backend → eks
-                                   │
-              ┌────────────────────┼────────────────────┐
-              ▼                    ▼                    ▼
-        LocalStack APIs     IAM roles for EKS      kubernetes provider
-        :4566               (mirror)               → Kind workloads
 ```
 
 State backends:
@@ -135,12 +163,13 @@ flowchart LR
   job -->|AWS_ENDPOINT_URL| sqs[SQS / SNS on LocalStack]
 ```
 
-**Startup order (fragile if reversed):**
+**Startup order:**
 
-1. `kind-up.sh` — creates Kind + Docker network `kind` + metrics-server  
-2. `docker compose up` — starts LocalStack  
-3. `docker network connect kind testinfra-localstack` (idempotent in `up.sh`)  
-4. `terraform apply` eks — discovers IP, creates Service/Endpoints, runs smoke Job  
+**Local (`./scripts/up.sh`):** Kind → LocalStack → `docker network connect` → full apply.
+
+**CI:** LocalStack alone → apply shared/network/backend → Kind + connect → apply eks.
+Only the `eks` stack needs Kind; deferring it avoids Docker/CPU contention on
+small runners (see [CI sequencing](#ci-sequencing-kind-deferred)).
 
 If LocalStack is not on the `kind` network before eks apply, `data.external.localstack_network` fails.
 
@@ -165,11 +194,11 @@ sequenceDiagram
   participant T as Terraform
   participant V as verify-apply.sh
 
-  U->>K: kind-up.sh
-  U->>L: docker compose up
-  U->>T: sync-live + apply shared
-  U->>T: apply network
-  U->>T: apply backend
+  Note over U,L: CI starts LocalStack first; Kind deferred until eks
+  U->>L: docker compose up (SKIP_KIND in CI)
+  U->>T: apply shared / network / backend
+  U->>K: kind-up.sh (CI only after early stacks)
+  U->>L: network connect kind
   U->>T: apply eks (IAM + Kind workload)
   T->>L: Create IAM roles (EKS-shaped)
   T->>K: Namespace / Deployment / Service / ConfigMap
