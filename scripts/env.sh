@@ -45,8 +45,8 @@ run_stack() {
   label="$(echo "$ACTION" | tr '[:lower:]' '[:upper:]')"
   echo ""
   echo "======== ${label}: $ENV/$stack ========"
-  # -reconfigure picks up workspace execution-mode changes (remote → local)
-  terraform -chdir="$dir" init -input=false -reconfigure
+  # Do not pass -reconfigure with terraform { cloud {} } — Terraform rejects it.
+  terraform -chdir="$dir" init -input=false
   case "$ACTION" in
     apply)   terraform -chdir="$dir" apply -auto-approve -input=false ;;
     destroy) terraform -chdir="$dir" destroy -auto-approve -input=false ;;

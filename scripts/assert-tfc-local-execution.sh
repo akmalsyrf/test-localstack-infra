@@ -53,6 +53,6 @@ if [[ "$bad" -gt 0 ]]; then
   echo "" >&2
   echo "Refusing to continue: $bad workspace(s) still use remote execution." >&2
   echo "Run: ./scripts/ensure-tfc-local-execution.sh" >&2
-  echo "Then: terraform -chdir=<stack> init -reconfigure" >&2
+  echo "Then: terraform -chdir=<stack> init" >&2
   exit 1
 fi

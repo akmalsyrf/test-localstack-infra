@@ -185,7 +185,8 @@ cd terraform/tfc-bootstrap && terraform apply
 |---|---|
 | `Unauthorized` / TFC login errors | Set `TF_TOKEN_app_terraform_io` (Actions secret or local export) |
 | Workspace not found | Run `terraform/tfc-bootstrap` apply; check org name `ExperimentTerraform` |
-| `Preparing the remote apply...` / `Unreadable module directory ../../../modules` | Workspace is still **remote**. Run `./scripts/ensure-tfc-local-execution.sh`, confirm with `./scripts/assert-tfc-local-execution.sh`, then `terraform init -reconfigure` (or just `./scripts/env.sh staging apply`, which does all of this). UI: Execution Mode → **Local (custom)** — not "Project default". |
+| `Preparing the remote apply...` / `Unreadable module directory ../../../modules` | Workspace is still **remote**. Run `./scripts/ensure-tfc-local-execution.sh`, confirm with `./scripts/assert-tfc-local-execution.sh`, then `terraform init` (or `./scripts/env.sh staging apply`). UI: Execution Mode → **Local (custom)** — not "Project default". |
+| `Invalid command-line option` for `-reconfigure` with Cloud | Expected with `terraform { cloud {} }`. Use plain `terraform init` (no `-reconfigure`). |
 | Plan runs on TFC agents and cannot reach LocalStack | Same as above — must be **Local** execution |
 | `connection refused :4566` | Start LocalStack (`./scripts/up.sh` or wait for compose health in CI) |
 | `tfe_outputs` empty | Apply `shared` and `network` first; confirm remote state sharing |

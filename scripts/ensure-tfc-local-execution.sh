@@ -188,5 +188,5 @@ if [[ "$fail" -gt 0 ]]; then
 fi
 
 echo "All workspaces verified local."
-echo "Re-init stacks with: terraform -chdir=<stack> init -reconfigure"
+echo "Re-init stacks with: terraform -chdir=<stack> init"
 echo "You must NOT see: \"Preparing the remote apply...\""
