@@ -2,6 +2,8 @@
 # Sync _templates → live/{dev,staging}/{shared,network,backend,eks}
 #
 # BACKEND=local (default) → local terraform.tfstate (recommended for LocalStack)
+# BACKEND=s3              → S3 + DynamoDB remote state on LocalStack
+#                           (run ./scripts/use-s3-backend.sh first to bootstrap)
 # BACKEND=cloud           → Terraform Cloud remote state (org ExperimentTerraform)
 #                           Requires workspace execution_mode=local or apply fails.
 set -euo pipefail
@@ -16,6 +18,8 @@ APP_NAME="${APP_NAME:-testinfra}"
 PROJECTS=(shared network backend eks)
 KIND_KUBECONFIG="${KIND_KUBECONFIG:-$ROOT/.kube/kind-config}"
 KIND_CONTEXT="${KIND_CONTEXT:-kind-testinfra-eks}"
+AWS_REGION="${AWS_DEFAULT_REGION:-ap-southeast-3}"
+LOCALSTACK_ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
 
 vendor_modules() {
   local dest="$1"
@@ -57,6 +61,37 @@ stage_lambda_zip() {
   fi
 }
 
+render_s3_versions() {
+  local src="$1"
+  local dest="$2"
+  local env="$3"
+  local project="$4"
+  local bucket="tfstate-${APP_NAME}-${env}"
+  local table="tflock-${APP_NAME}-${env}"
+  local key="${project}/terraform.tfstate"
+
+  sed \
+    -e "s|__TFSTATE_BUCKET__|${bucket}|g" \
+    -e "s|__TFLOCK_TABLE__|${table}|g" \
+    -e "s|__TFSTATE_KEY__|${key}|g" \
+    -e "s|__AWS_REGION__|${AWS_REGION}|g" \
+    -e "s|__LOCALSTACK_ENDPOINT__|${LOCALSTACK_ENDPOINT}|g" \
+    "$src" > "$dest"
+}
+
+render_s3_main() {
+  local src="$1"
+  local dest="$2"
+  local env="$3"
+  local bucket="tfstate-${APP_NAME}-${env}"
+
+  sed \
+    -e "s|__TFSTATE_BUCKET__|${bucket}|g" \
+    -e "s|__AWS_REGION__|${AWS_REGION}|g" \
+    -e "s|__LOCALSTACK_ENDPOINT__|${LOCALSTACK_ENDPOINT}|g" \
+    "$src" > "$dest"
+}
+
 sync_project() {
   local env="$1"
   local project="$2"
@@ -72,6 +107,14 @@ sync_project() {
       cp "$TPL/$project/main.tf" "$dest/main.tf"
     else
       sed "s/__TFC_WORKSPACE__/${workspace}/g" "$TPL/_common/versions.tf" > "$dest/versions.tf"
+      cp "$TPL/$project/main.tf" "$dest/main.tf"
+    fi
+  elif [[ "$BACKEND" == "s3" ]]; then
+    if [[ "$project" == "backend" || "$project" == "eks" ]]; then
+      render_s3_versions "$TPL/$project/versions.s3.tf" "$dest/versions.tf" "$env" "$project"
+      render_s3_main "$TPL/$project/main.s3.tf" "$dest/main.tf" "$env"
+    else
+      render_s3_versions "$TPL/_common/versions.s3.tf" "$dest/versions.tf" "$env" "$project"
       cp "$TPL/$project/main.tf" "$dest/main.tf"
     fi
   else
@@ -116,8 +159,8 @@ write_tfvars() {
 project_name           = "${APP_NAME}"
 environment            = "$short"
 environment_slug       = "$env"
-aws_region             = "ap-southeast-3"
-localstack_endpoint    = "http://localhost:4566"
+aws_region             = "${AWS_REGION}"
+localstack_endpoint    = "${LOCALSTACK_ENDPOINT}"
 tfc_organization       = "${tfc_org}"
 kind_kubeconfig_path   = "${KIND_KUBECONFIG}"
 kind_context           = "${KIND_CONTEXT}"
@@ -129,6 +172,14 @@ EOF
     cp "$LIVE/$env/$project/terraform.tfvars" "$LIVE/$env/$project/terraform.tfvars.example"
   done
 }
+
+case "$BACKEND" in
+  local|s3|cloud) ;;
+  *)
+    echo "Unknown BACKEND=$BACKEND (expected local|s3|cloud)" >&2
+    exit 1
+    ;;
+esac
 
 for env in dev staging; do
   for project in "${PROJECTS[@]}"; do
@@ -142,4 +193,7 @@ write_tfvars "staging" "stg" "10.1"
 echo "Synced templates → live/{dev,staging}/{shared,network,backend,eks} (BACKEND=${BACKEND}, TFC_ORG=${TFC_ORG})"
 if [[ "$BACKEND" == "cloud" ]]; then
   echo "NOTE: TFC workspaces MUST use execution_mode=local. Run: ./scripts/ensure-tfc-local-execution.sh"
+fi
+if [[ "$BACKEND" == "s3" ]]; then
+  echo "NOTE: Ensure s3-bootstrap applied (./scripts/use-s3-backend.sh <env>) before first init."
 fi

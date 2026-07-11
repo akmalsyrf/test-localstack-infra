@@ -33,6 +33,7 @@ provider "aws" {
     apigateway     = var.localstack_endpoint
     cloudwatch     = var.localstack_endpoint
     logs           = var.localstack_endpoint
+    dynamodb       = var.localstack_endpoint
     ec2            = var.localstack_endpoint
     iam            = var.localstack_endpoint
     lambda         = var.localstack_endpoint
@@ -42,5 +43,6 @@ provider "aws" {
     sqs            = var.localstack_endpoint
     ssm            = var.localstack_endpoint
     sts            = var.localstack_endpoint
+    xray           = var.localstack_endpoint
   }
 }

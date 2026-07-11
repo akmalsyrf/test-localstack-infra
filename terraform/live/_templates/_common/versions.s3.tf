@@ -1,5 +1,5 @@
-# Backend stack — Terraform Cloud remote state + tfe_outputs for cross-stack reads.
-# Workspace name is injected by scripts/sync-live.sh
+# S3 + DynamoDB remote state on LocalStack (BACKEND=s3).
+# Placeholders injected by scripts/sync-live.sh
 
 terraform {
   required_version = ">= 1.5.0"
@@ -9,18 +9,20 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    tfe = {
-      source  = "hashicorp/tfe"
-      version = "~> 0.58"
-    }
   }
 
-  cloud {
-    organization = "ExperimentTerraform"
-
-    workspaces {
-      name = "__TFC_WORKSPACE__"
-    }
+  backend "s3" {
+    bucket                      = "__TFSTATE_BUCKET__"
+    key                         = "__TFSTATE_KEY__"
+    region                      = "__AWS_REGION__"
+    dynamodb_table              = "__TFLOCK_TABLE__"
+    endpoint                    = "__LOCALSTACK_ENDPOINT__"
+    dynamodb_endpoint           = "__LOCALSTACK_ENDPOINT__"
+    access_key                  = "test"
+    secret_key                  = "test"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    force_path_style            = true
   }
 }
 
@@ -50,6 +52,3 @@ provider "aws" {
     xray           = var.localstack_endpoint
   }
 }
-
-# Reads outputs from testinfra-shared-* and testinfra-network-* workspaces
-provider "tfe" {}

@@ -1,5 +1,4 @@
-# Backend stack — Terraform Cloud remote state + tfe_outputs for cross-stack reads.
-# Workspace name is injected by scripts/sync-live.sh
+# EKS stack — S3 remote state on LocalStack (BACKEND=s3).
 
 terraform {
   required_version = ">= 1.5.0"
@@ -9,18 +8,24 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    tfe = {
-      source  = "hashicorp/tfe"
-      version = "~> 0.58"
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.30"
     }
   }
 
-  cloud {
-    organization = "ExperimentTerraform"
-
-    workspaces {
-      name = "__TFC_WORKSPACE__"
-    }
+  backend "s3" {
+    bucket                      = "__TFSTATE_BUCKET__"
+    key                         = "__TFSTATE_KEY__"
+    region                      = "__AWS_REGION__"
+    dynamodb_table              = "__TFLOCK_TABLE__"
+    endpoint                    = "__LOCALSTACK_ENDPOINT__"
+    dynamodb_endpoint           = "__LOCALSTACK_ENDPOINT__"
+    access_key                  = "test"
+    secret_key                  = "test"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    force_path_style            = true
   }
 }
 
@@ -39,6 +44,7 @@ provider "aws" {
     logs           = var.localstack_endpoint
     dynamodb       = var.localstack_endpoint
     ec2            = var.localstack_endpoint
+    eks            = var.localstack_endpoint
     iam            = var.localstack_endpoint
     lambda         = var.localstack_endpoint
     s3             = var.localstack_endpoint
@@ -51,5 +57,7 @@ provider "aws" {
   }
 }
 
-# Reads outputs from testinfra-shared-* and testinfra-network-* workspaces
-provider "tfe" {}
+provider "kubernetes" {
+  config_path    = var.kind_kubeconfig_path
+  config_context = var.kind_context
+}

@@ -20,8 +20,18 @@ uses_tfc_cloud() {
   grep -q 'cloud {' "$LIVE/shared/versions.tf" 2>/dev/null
 }
 
+uses_s3_backend() {
+  grep -q 'backend "s3"' "$LIVE/shared/versions.tf" 2>/dev/null
+}
+
 stack_has_state() {
   local stack="$1"
+  if uses_s3_backend || uses_tfc_cloud; then
+    # Remote backends: probe via outputs after init (no local terraform.tfstate).
+    terraform -chdir="$LIVE/$stack" init -input=false >/dev/null 2>&1 || return 1
+    terraform -chdir="$LIVE/$stack" output -json >/dev/null 2>&1
+    return $?
+  fi
   local state="$LIVE/$stack/terraform.tfstate"
   [[ -f "$state" ]] || return 1
   # Empty / never-applied local state still "exists" as a file sometimes; require outputs.
@@ -99,6 +109,20 @@ if uses_tfc_cloud; then
     exit 1
   fi
   "$ROOT/scripts/ensure-tfc-local-execution.sh"
+fi
+
+if uses_s3_backend; then
+  export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
+  export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
+  export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-southeast-3}"
+  export AWS_EC2_METADATA_DISABLED=true
+  BUCKET="tfstate-testinfra-${ENV}"
+  if ! aws --endpoint-url="${LOCALSTACK_ENDPOINT:-http://localhost:4566}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
+    echo "S3 backend bucket missing ($BUCKET). Run: ./scripts/use-s3-backend.sh $ENV" >&2
+    exit 1
+  fi
 fi
 
 echo "==> Packaging Lambda zip..."

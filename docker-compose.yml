@@ -6,7 +6,8 @@ services:
       - "4566:4566"
     environment:
       # EKS API is LocalStack Pro-only; Kind is the free-tier control-plane stand-in.
-      - SERVICES=s3,iam,sts,ec2,lambda,apigateway,sqs,sns,logs,secretsmanager,ssm,cloudwatch
+      # dynamodb: S3 backend state locking (BACKEND=s3). xray: Lambda Active tracing.
+      - SERVICES=s3,iam,sts,ec2,lambda,apigateway,sqs,sns,logs,secretsmanager,ssm,cloudwatch,dynamodb,xray
       - DEBUG=0
       - PERSISTENCE=0
       # Legacy path URLs (http://localhost:4566/000000000000/queue) — AWS Terraform
