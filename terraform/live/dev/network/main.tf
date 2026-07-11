@@ -39,3 +39,15 @@ output "private_subnet_ids" {
 output "security_group_id" {
   value = module.sg_ec2_backend.security_group_id
 }
+
+output "igw_id" {
+  value = module.network.igw_id
+}
+
+output "public_subnet_count" {
+  value = length(module.network.public_subnet_ids)
+}
+
+output "private_subnet_count" {
+  value = length(module.network.private_subnet_ids)
+}

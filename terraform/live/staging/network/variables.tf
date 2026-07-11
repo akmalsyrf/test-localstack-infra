@@ -34,6 +34,18 @@ variable "tags" {
   default = {}
 }
 
+variable "kind_kubeconfig_path" {
+  type        = string
+  description = "Path to Kind kubeconfig for the kubernetes provider (EKS sample workload)"
+  default     = ""
+}
+
+variable "kind_context" {
+  type        = string
+  description = "kubectl context name for the Kind cluster"
+  default     = "kind-testinfra-eks"
+}
+
 locals {
   prefix = "${var.project_name}-${var.environment}"
   tags = merge(var.tags, {

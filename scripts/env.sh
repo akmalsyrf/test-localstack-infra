@@ -13,10 +13,83 @@ fi
 "$ROOT/scripts/sync-live.sh"
 
 LIVE="$ROOT/terraform/live/$ENV"
-STACKS=(shared network backend)
+# Apply order: shared → network → backend → eks (EKS needs VPC/subnets)
+STACKS=(shared network backend eks)
 
 uses_tfc_cloud() {
   grep -q 'cloud {' "$LIVE/shared/versions.tf" 2>/dev/null
+}
+
+stack_has_state() {
+  local stack="$1"
+  local state="$LIVE/$stack/terraform.tfstate"
+  [[ -f "$state" ]] || return 1
+  # Empty / never-applied local state still "exists" as a file sometimes; require outputs.
+  terraform -chdir="$LIVE/$stack" output -json >/dev/null 2>&1
+}
+
+apply_stack() {
+  local stack="$1"
+  local dir="$LIVE/$stack"
+  local parallelism=10
+
+  echo ""
+  echo "======== APPLY: $ENV/$stack ========"
+  terraform -chdir="$dir" init -input=false
+
+  if [[ "$stack" == "backend" ]]; then
+    parallelism=1
+  fi
+  terraform -chdir="$dir" apply -auto-approve -input=false -parallelism="$parallelism"
+}
+
+plan_stack() {
+  local stack="$1"
+  local dir="$LIVE/$stack"
+
+  echo ""
+  echo "======== PLAN: $ENV/$stack ========"
+  terraform -chdir="$dir" init -input=false
+  terraform -chdir="$dir" plan -input=false
+}
+
+destroy_stack() {
+  local stack="$1"
+  local dir="$LIVE/$stack"
+  local parallelism=10
+
+  echo ""
+  echo "======== DESTROY: $ENV/$stack ========"
+  terraform -chdir="$dir" init -input=false
+
+  if [[ "$stack" == "backend" ]]; then
+    parallelism=1
+  fi
+  terraform -chdir="$dir" destroy -auto-approve -input=false -parallelism="$parallelism"
+}
+
+# Local backend: dependent stacks read sibling terraform.tfstate via
+# terraform_remote_state. Ephemeral CI (and fresh checkouts) have no state until
+# apply — so plan must apply upstream stacks first.
+ensure_upstream_state_for_plan() {
+  local stack="$1"
+  case "$stack" in
+    backend)
+      for dep in shared network; do
+        if ! stack_has_state "$dep"; then
+          echo "==> plan needs $dep state (terraform_remote_state); applying $dep first..."
+          apply_stack "$dep"
+        fi
+      done
+      ;;
+    eks)
+      if ! stack_has_state network; then
+        echo "==> plan needs network state (terraform_remote_state); applying network first..."
+        # network may itself be fine without shared; apply network only if missing
+        apply_stack network
+      fi
+      ;;
+  esac
 }
 
 if uses_tfc_cloud; then
@@ -35,44 +108,33 @@ if [[ -d "$LIVE/backend/lambda" ]]; then
   cp "$ROOT/lambda/api/function.zip" "$LIVE/backend/lambda/function.zip"
 fi
 
-run_stack() {
-  local stack="$1"
-  local dir="$LIVE/$stack"
-  local label parallelism=10
-  label="$(echo "$ACTION" | tr '[:lower:]' '[:upper:]')"
-
-  echo ""
-  echo "======== ${label}: $ENV/$stack ========"
-
-  terraform -chdir="$dir" init -input=false
-
-  # Backend messaging (SNS/SQS) must stay serial on LocalStack
-  if [[ "$stack" == "backend" ]]; then
-    parallelism=1
-  fi
-
-  case "$ACTION" in
-    apply)   terraform -chdir="$dir" apply -auto-approve -input=false -parallelism="$parallelism" ;;
-    destroy) terraform -chdir="$dir" destroy -auto-approve -input=false -parallelism="$parallelism" ;;
-    plan)    terraform -chdir="$dir" plan -input=false ;;
-    *) echo "Unknown action: $ACTION" >&2; exit 1 ;;
-  esac
-}
-
-if [[ "$ACTION" == "destroy" ]]; then
-  for ((i=${#STACKS[@]}-1; i>=0; i--)); do
-    run_stack "${STACKS[$i]}"
-  done
-else
-  for stack in "${STACKS[@]}"; do
-    run_stack "$stack"
-  done
-fi
-
-if [[ "$ACTION" == "apply" ]]; then
-  echo ""
-  echo "==> Outputs ($ENV/backend):"
-  terraform -chdir="$LIVE/backend" output || true
-  echo ""
-  "$ROOT/scripts/verify-apply.sh" "$ENV"
-fi
+case "$ACTION" in
+  apply)
+    for stack in "${STACKS[@]}"; do
+      apply_stack "$stack"
+    done
+    echo ""
+    echo "==> Outputs ($ENV/backend):"
+    terraform -chdir="$LIVE/backend" output || true
+    echo ""
+    echo "==> Outputs ($ENV/eks):"
+    terraform -chdir="$LIVE/eks" output || true
+    echo ""
+    "$ROOT/scripts/verify-apply.sh" "$ENV"
+    ;;
+  destroy)
+    for ((i=${#STACKS[@]}-1; i>=0; i--)); do
+      destroy_stack "${STACKS[$i]}"
+    done
+    ;;
+  plan)
+    for stack in "${STACKS[@]}"; do
+      ensure_upstream_state_for_plan "$stack"
+      plan_stack "$stack"
+    done
+    ;;
+  *)
+    echo "Unknown action: $ACTION" >&2
+    exit 1
+    ;;
+esac
