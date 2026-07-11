@@ -6,6 +6,7 @@ module "network" {
   project_name    = var.project_name
   environment     = var.environment
   vpc_cidr_prefix = var.vpc_cidr_prefix
+  aws_region      = var.aws_region
   tags            = local.tags
 }
 
@@ -42,6 +43,10 @@ output "security_group_id" {
 
 output "igw_id" {
   value = module.network.igw_id
+}
+
+output "s3_vpc_endpoint_id" {
+  value = module.network.s3_vpc_endpoint_id
 }
 
 output "public_subnet_count" {

@@ -1,4 +1,12 @@
 # Sample workload on Kind (mirrors deploying into LocalStack EKS after CreateNodegroup).
+#
+# HPA / Cluster Autoscaler note (LocalStack free + Kind):
+# Real HorizontalPodAutoscaler and Cluster Autoscaler need metrics-server (and
+# optionally the AWS cloud provider). Kind does not ship metrics-server by default.
+# To enable later: install metrics-server into kind/cluster.yaml (or a post-up
+# manifest), then add kubernetes_horizontal_pod_autoscaler_v2 with
+# minReplicas=2, maxReplicas=4 targeting this Deployment. Skipped here to keep
+# the Kind bootstrap minimal and avoid verify flakes without metrics-server.
 
 resource "kubernetes_namespace_v1" "app" {
   count = var.deploy_sample_workload ? 1 : 0
@@ -52,6 +60,17 @@ resource "kubernetes_deployment_v1" "sample" {
             name           = "http"
           }
 
+          resources {
+            requests = {
+              cpu    = "50m"
+              memory = "64Mi"
+            }
+            limits = {
+              cpu    = "200m"
+              memory = "128Mi"
+            }
+          }
+
           readiness_probe {
             http_get {
               path = "/"
@@ -59,6 +78,15 @@ resource "kubernetes_deployment_v1" "sample" {
             }
             initial_delay_seconds = 2
             period_seconds        = 5
+          }
+
+          liveness_probe {
+            http_get {
+              path = "/"
+              port = 80
+            }
+            initial_delay_seconds = 5
+            period_seconds        = 10
           }
         }
       }

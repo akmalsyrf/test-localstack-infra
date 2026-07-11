@@ -37,7 +37,7 @@ variable "deploy_sample_workload" {
 
 variable "sample_replicas" {
   type    = number
-  default = 1
+  default = 2
 }
 
 variable "sample_node_port" {

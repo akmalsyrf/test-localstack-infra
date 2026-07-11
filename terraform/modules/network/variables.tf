@@ -14,6 +14,11 @@ variable "vpc_cidr_prefix" {
   default     = "10.1"
 }
 
+variable "aws_region" {
+  type    = string
+  default = "ap-southeast-3"
+}
+
 variable "availability_zones" {
   type    = list(string)
   default = ["ap-southeast-3a", "ap-southeast-3b", "ap-southeast-3c"]
