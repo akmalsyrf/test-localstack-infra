@@ -72,7 +72,7 @@ sync_project() {
   else
     if [[ "$project" == "backend" ]]; then
       cp "$TPL/backend/versions.local.tf" "$dest/versions.tf"
-      cp "$TPL/backend/main.tf" "$dest/main.tf"
+      cp "$TPL/backend/main.local.tf" "$dest/main.tf"
     else
       cp "$TPL/_common/versions.local.tf" "$dest/versions.tf"
       cp "$TPL/$project/main.tf" "$dest/main.tf"

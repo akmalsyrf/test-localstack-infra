@@ -1,4 +1,4 @@
-# Optional local-only backend for the backend stack (no Terraform Cloud).
+# Optional local-only backend for the backend stack (no Terraform Cloud / no tfe provider).
 
 terraform {
   required_version = ">= 1.5.0"
@@ -7,10 +7,6 @@ terraform {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
-    }
-    tfe = {
-      source  = "hashicorp/tfe"
-      version = "~> 0.58"
     }
   }
 
@@ -41,5 +37,3 @@ provider "aws" {
     sts            = var.localstack_endpoint
   }
 }
-
-provider "tfe" {}

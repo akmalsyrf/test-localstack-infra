@@ -1,9 +1,7 @@
-# Cross-stack inputs: network + shared
-# - Local: terraform_remote_state from sibling dirs
-# - Terraform Cloud: tfe_outputs from mapped workspaces
+# Backend stack — local state only (reads sibling terraform.tfstate files).
+# No tfe provider / tfe_outputs (those are in main.tf for BACKEND=cloud).
 
 data "terraform_remote_state" "network" {
-  count   = var.tfc_organization == "" ? 1 : 0
   backend = "local"
   config = {
     path = "${path.module}/../network/terraform.tfstate"
@@ -11,28 +9,15 @@ data "terraform_remote_state" "network" {
 }
 
 data "terraform_remote_state" "shared" {
-  count   = var.tfc_organization == "" ? 1 : 0
   backend = "local"
   config = {
     path = "${path.module}/../shared/terraform.tfstate"
   }
 }
 
-data "tfe_outputs" "network" {
-  count        = var.tfc_organization != "" ? 1 : 0
-  organization = var.tfc_organization
-  workspace    = "${var.project_name}-network-${var.environment_slug}"
-}
-
-data "tfe_outputs" "shared" {
-  count        = var.tfc_organization != "" ? 1 : 0
-  organization = var.tfc_organization
-  workspace    = "${var.project_name}-shared-${var.environment_slug}"
-}
-
 locals {
-  network = var.tfc_organization == "" ? data.terraform_remote_state.network[0].outputs : data.tfe_outputs.network[0].values
-  shared  = var.tfc_organization == "" ? data.terraform_remote_state.shared[0].outputs : data.tfe_outputs.shared[0].values
+  network = data.terraform_remote_state.network.outputs
+  shared  = data.terraform_remote_state.shared.outputs
 }
 
 resource "aws_cloudwatch_log_group" "backend" {
