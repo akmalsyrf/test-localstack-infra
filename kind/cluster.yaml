@@ -1,0 +1,26 @@
+# Kind cluster backing LocalStack EKS mirror.
+# Control-plane + worker; host NodePorts for per-env sample Services.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: testinfra-eks
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true,role=control-plane"
+    extraPortMappings:
+      # staging sample Service
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP
+      # dev sample Service
+      - containerPort: 30081
+        hostPort: 30081
+        protocol: TCP
+  - role: worker
+    labels:
+      role: worker
+      tier: app

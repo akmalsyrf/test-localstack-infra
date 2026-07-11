@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync _templates → live/{dev,staging}/{shared,network,backend}
+# Sync _templates → live/{dev,staging}/{shared,network,backend,eks}
 #
 # BACKEND=local (default) → local terraform.tfstate (recommended for LocalStack)
 # BACKEND=cloud           → Terraform Cloud remote state (org ExperimentTerraform)
@@ -13,6 +13,9 @@ MODULES="$ROOT/terraform/modules"
 BACKEND="${BACKEND:-local}"
 TFC_ORG="${TFC_ORG:-ExperimentTerraform}"
 APP_NAME="${APP_NAME:-testinfra}"
+PROJECTS=(shared network backend eks)
+KIND_KUBECONFIG="${KIND_KUBECONFIG:-$ROOT/.kube/kind-config}"
+KIND_CONTEXT="${KIND_CONTEXT:-kind-testinfra-eks}"
 
 vendor_modules() {
   local dest="$1"
@@ -25,6 +28,8 @@ vendor_modules() {
     | sed -E 's|.*modules/([^"]+)".*|\1|' | sort -u); do
     if [[ -d "$MODULES/$name" ]]; then
       cp -R "$MODULES/$name" "$dest/modules/$name"
+      # Preserve executable helpers (e.g. eks/scripts/kind-info.sh)
+      find "$dest/modules/$name" -type f -name '*.sh' -exec chmod +x {} \;
     else
       echo "Missing module: $MODULES/$name" >&2
       exit 1
@@ -62,17 +67,17 @@ sync_project() {
   cp "$TPL/_common/variables.tf" "$dest/variables.tf"
 
   if [[ "$BACKEND" == "cloud" ]]; then
-    if [[ "$project" == "backend" ]]; then
-      sed "s/__TFC_WORKSPACE__/${workspace}/g" "$TPL/backend/versions.tf" > "$dest/versions.tf"
-      cp "$TPL/backend/main.tf" "$dest/main.tf"
+    if [[ "$project" == "backend" || "$project" == "eks" ]]; then
+      sed "s/__TFC_WORKSPACE__/${workspace}/g" "$TPL/$project/versions.tf" > "$dest/versions.tf"
+      cp "$TPL/$project/main.tf" "$dest/main.tf"
     else
       sed "s/__TFC_WORKSPACE__/${workspace}/g" "$TPL/_common/versions.tf" > "$dest/versions.tf"
       cp "$TPL/$project/main.tf" "$dest/main.tf"
     fi
   else
-    if [[ "$project" == "backend" ]]; then
-      cp "$TPL/backend/versions.local.tf" "$dest/versions.tf"
-      cp "$TPL/backend/main.local.tf" "$dest/main.tf"
+    if [[ "$project" == "backend" || "$project" == "eks" ]]; then
+      cp "$TPL/$project/versions.local.tf" "$dest/versions.tf"
+      cp "$TPL/$project/main.local.tf" "$dest/main.tf"
     else
       cp "$TPL/_common/versions.local.tf" "$dest/versions.tf"
       cp "$TPL/$project/main.tf" "$dest/main.tf"
@@ -106,14 +111,16 @@ write_tfvars() {
     tfc_org="$TFC_ORG"
   fi
 
-  for project in shared network backend; do
+  for project in "${PROJECTS[@]}"; do
     cat > "$LIVE/$env/$project/terraform.tfvars" <<EOF
-project_name        = "${APP_NAME}"
-environment         = "$short"
-environment_slug    = "$env"
-aws_region          = "ap-southeast-3"
-localstack_endpoint = "http://localhost:4566"
-tfc_organization    = "${tfc_org}"
+project_name           = "${APP_NAME}"
+environment            = "$short"
+environment_slug       = "$env"
+aws_region             = "ap-southeast-3"
+localstack_endpoint    = "http://localhost:4566"
+tfc_organization       = "${tfc_org}"
+kind_kubeconfig_path   = "${KIND_KUBECONFIG}"
+kind_context           = "${KIND_CONTEXT}"
 EOF
     if [[ "$project" == "network" ]]; then
       echo "vpc_cidr_prefix = \"$cidr\"" >> "$LIVE/$env/$project/terraform.tfvars"
@@ -124,7 +131,7 @@ EOF
 }
 
 for env in dev staging; do
-  for project in shared network backend; do
+  for project in "${PROJECTS[@]}"; do
     sync_project "$env" "$project"
   done
 done
@@ -132,7 +139,7 @@ done
 write_tfvars "dev" "dev" "10.3"
 write_tfvars "staging" "stg" "10.1"
 
-echo "Synced templates → live/{dev,staging}/{shared,network,backend} (BACKEND=${BACKEND}, TFC_ORG=${TFC_ORG})"
+echo "Synced templates → live/{dev,staging}/{shared,network,backend,eks} (BACKEND=${BACKEND}, TFC_ORG=${TFC_ORG})"
 if [[ "$BACKEND" == "cloud" ]]; then
   echo "NOTE: TFC workspaces MUST use execution_mode=local. Run: ./scripts/ensure-tfc-local-execution.sh"
 fi

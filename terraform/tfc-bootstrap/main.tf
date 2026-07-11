@@ -50,11 +50,18 @@ resource "tfe_project" "backend" {
   description  = "Backend application resources (EC2, Lambda, API GW, SNS/SQS)"
 }
 
+resource "tfe_project" "eks" {
+  organization = var.organization
+  name         = "${var.project_name}-eks"
+  description  = "EKS (LocalStack API) backed by Kind + sample workload"
+}
+
 locals {
   projects = {
     shared  = tfe_project.shared.id
     network = tfe_project.network.id
     backend = tfe_project.backend.id
+    eks     = tfe_project.eks.id
   }
 
   workspaces = flatten([
@@ -124,6 +131,7 @@ output "projects" {
     shared  = { id = tfe_project.shared.id, name = tfe_project.shared.name }
     network = { id = tfe_project.network.id, name = tfe_project.network.name }
     backend = { id = tfe_project.backend.id, name = tfe_project.backend.name }
+    eks     = { id = tfe_project.eks.id, name = tfe_project.eks.name }
   }
 }
 

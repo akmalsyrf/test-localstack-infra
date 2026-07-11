@@ -13,7 +13,8 @@ fi
 "$ROOT/scripts/sync-live.sh"
 
 LIVE="$ROOT/terraform/live/$ENV"
-STACKS=(shared network backend)
+# Apply order: shared → network → backend → eks (EKS needs VPC/subnets)
+STACKS=(shared network backend eks)
 
 uses_tfc_cloud() {
   grep -q 'cloud {' "$LIVE/shared/versions.tf" 2>/dev/null
@@ -73,6 +74,9 @@ if [[ "$ACTION" == "apply" ]]; then
   echo ""
   echo "==> Outputs ($ENV/backend):"
   terraform -chdir="$LIVE/backend" output || true
+  echo ""
+  echo "==> Outputs ($ENV/eks):"
+  terraform -chdir="$LIVE/eks" output || true
   echo ""
   "$ROOT/scripts/verify-apply.sh" "$ENV"
 fi

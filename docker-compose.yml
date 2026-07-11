@@ -5,6 +5,7 @@ services:
     ports:
       - "4566:4566"
     environment:
+      # EKS API is LocalStack Pro-only; Kind is the free-tier control-plane stand-in.
       - SERVICES=s3,iam,sts,ec2,lambda,apigateway,sqs,sns,logs,secretsmanager,ssm,cloudwatch
       - DEBUG=0
       - PERSISTENCE=0
@@ -16,6 +17,8 @@ services:
       - LAMBDA_RUNTIME_EXECUTOR=docker
       - LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=60
       - DOCKER_HOST=unix:///var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - localstack-data:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock

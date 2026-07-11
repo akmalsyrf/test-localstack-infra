@@ -71,7 +71,7 @@ print(json.dumps({
 echo "======== TFC local-execution enforce (org=$ORG) ========"
 
 projects_json="$(api_get "${API}/organizations/${ORG}/projects?page%5Bsize%5D=100")"
-for pname in "${APP_NAME}-shared" "${APP_NAME}-network" "${APP_NAME}-backend"; do
+for pname in "${APP_NAME}-shared" "${APP_NAME}-network" "${APP_NAME}-backend" "${APP_NAME}-eks"; do
   pid="$(echo "$projects_json" | python3 -c '
 import json,sys
 want=sys.argv[1]
@@ -99,7 +99,8 @@ fail=0
 for name in \
   "${APP_NAME}-shared-dev" "${APP_NAME}-shared-staging" \
   "${APP_NAME}-network-dev" "${APP_NAME}-network-staging" \
-  "${APP_NAME}-backend-dev" "${APP_NAME}-backend-staging"
+  "${APP_NAME}-backend-dev" "${APP_NAME}-backend-staging" \
+  "${APP_NAME}-eks-dev" "${APP_NAME}-eks-staging"
 do
   force_workspace_local "$name" || fail=$((fail + 1))
 done
