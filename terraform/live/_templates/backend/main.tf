@@ -1,6 +1,9 @@
 # Cross-stack inputs: network + shared
 # - Local: terraform_remote_state from sibling dirs
 # - Terraform Cloud: tfe_outputs from mapped workspaces
+#
+# ASG+launch_template self-healing: skipped — ALB health-check simulation on
+# LocalStack Community is incomplete; keep single EC2 with IMDSv2 + encrypted EBS.
 
 data "terraform_remote_state" "network" {
   count   = var.tfc_organization == "" ? 1 : 0
@@ -37,7 +40,7 @@ locals {
 
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "cloudwatch-${var.project_name}-ec2-backend-${var.environment_slug}"
-  retention_in_days = 7
+  retention_in_days = 14
   tags              = local.tags
 }
 
@@ -58,9 +61,25 @@ resource "aws_instance" "backend" {
   vpc_security_group_ids = [local.network.security_group_id]
   iam_instance_profile   = local.shared.instance_profile_name
 
+  metadata_options {
+    http_tokens = "required"
+  }
+
+  # volume_size required: LocalStack RunInstances rejects encrypted root without size/snapshotId.
+  root_block_device {
+    volume_size = 8
+    encrypted   = true
+  }
+
   tags = merge(local.tags, {
     Name = "ec2-${var.project_name}-backend-${var.environment_slug}"
   })
+
+  lifecycle {
+    # LocalStack accepts metadata_options on RunInstances but omits them on
+    # DescribeInstances → perpetual +metadata_options drift without ignore.
+    ignore_changes = [tags, tags_all, metadata_options]
+  }
 }
 
 module "messaging" {
@@ -75,11 +94,70 @@ module "lambda_api" {
   prefix          = local.prefix
   stage_name      = var.environment
   lambda_zip_path = "${path.module}/../../../../lambda/api/function.zip"
+  dlq_arn         = module.messaging.standard_dlq_arn
   environment_variables = {
     SERVICE     = "${var.project_name}-api"
     ENVIRONMENT = var.environment
   }
   tags = local.tags
+}
+
+resource "aws_sns_topic" "ops_alerts" {
+  name = "${local.prefix}-ops-alerts"
+}
+
+resource "aws_cloudwatch_metric_alarm" "ec2_status_check" {
+  alarm_name          = "${local.prefix}-ec2-status-check-failed"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "StatusCheckFailed"
+  namespace           = "AWS/EC2"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 0
+  alarm_description   = "EC2 instance status check failed"
+  alarm_actions       = [aws_sns_topic.ops_alerts.arn]
+  ok_actions          = [aws_sns_topic.ops_alerts.arn]
+
+  dimensions = {
+    InstanceId = aws_instance.backend.id
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  alarm_name          = "${local.prefix}-lambda-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Lambda function errors"
+  alarm_actions       = [aws_sns_topic.ops_alerts.arn]
+  ok_actions          = [aws_sns_topic.ops_alerts.arn]
+
+  dimensions = {
+    FunctionName = module.lambda_api.lambda_function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "sqs_depth" {
+  alarm_name          = "${local.prefix}-sqs-depth"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 100
+  alarm_description   = "SQS standard queue depth high"
+  alarm_actions       = [aws_sns_topic.ops_alerts.arn]
+  ok_actions          = [aws_sns_topic.ops_alerts.arn]
+
+  dimensions = {
+    QueueName = module.messaging.standard_queue_name
+  }
 }
 
 output "instance_id" {
@@ -102,6 +180,10 @@ output "standard_queue_url" {
   value = module.messaging.standard_queue_url
 }
 
+output "standard_dlq_url" {
+  value = module.messaging.standard_dlq_url
+}
+
 output "fifo_queue_url" {
   value = module.messaging.fifo_queue_url
 }
@@ -116,4 +198,8 @@ output "api_id" {
 
 output "api_invoke_url" {
   value = module.lambda_api.api_invoke_url
+}
+
+output "ops_alerts_topic_arn" {
+  value = aws_sns_topic.ops_alerts.arn
 }

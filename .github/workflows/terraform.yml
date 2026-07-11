@@ -3,6 +3,7 @@ name: Terraform LocalStack
 # Architecture:
 #   Git push → GitHub Actions → Kind + LocalStack (Docker) + Terraform CLI
 #                            → local terraform.tfstate (default; reliable with LocalStack)
+#                            → optional S3+DynamoDB on LocalStack (BACKEND=s3)
 #                            → optional Terraform Cloud (set BACKEND=cloud + secret; execution_mode=local)
 #                            → LocalStack APIs (localhost:4566) + Kind (EKS_K8S_PROVIDER=local)
 
@@ -44,8 +45,58 @@ env:
   BACKEND: local
 
 jobs:
+  static-analysis:
+    name: Static analysis (tflint + checkov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+          terraform_wrapper: false
+
+      - name: Sync live stacks (local backend)
+        run: |
+          chmod +x scripts/*.sh
+          BACKEND=local ./scripts/sync-live.sh
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.50.3
+
+      - name: TFLint
+        run: |
+          tflint --init || true
+          for dir in terraform/modules/* terraform/live/staging/*; do
+            [ -d "$dir" ] || continue
+            echo "==> tflint $dir"
+            tflint --chdir="$dir" --format compact || true
+          done
+          # Soft-fail style: re-run modules strictly (live is generated)
+          for dir in terraform/modules/*; do
+            [ -d "$dir" ] || continue
+            tflint --chdir="$dir" --format compact
+          done
+
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform/modules
+          framework: terraform
+          soft_fail: true
+          skip_check: CKV_AWS_144,CKV_AWS_18,CKV_AWS_21,CKV2_AWS_6,CKV_AWS_145,CKV_AWS_19,CKV_AWS_26,CKV_AWS_27,CKV_AWS_7
+
   terraform:
     name: Terraform (${{ github.event.inputs.environment || 'staging' }})
+    needs: static-analysis
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

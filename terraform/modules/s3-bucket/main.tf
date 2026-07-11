@@ -19,3 +19,34 @@ resource "aws_s3_bucket_versioning" "this" {
     status = var.versioning_enabled ? "Enabled" : "Suspended"
   }
 }
+
+# SSE-S3 (AES256) — AWS-owned key, no custom KMS (LocalStack free-tier safe).
+resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
+  bucket = aws_s3_bucket.this.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Expire noncurrent versions after 30 days when versioning is enabled.
+# Skipped when versioning is off (lifecycle filter would be a no-op / noise).
+resource "aws_s3_bucket_lifecycle_configuration" "this" {
+  count  = var.versioning_enabled ? 1 : 0
+  bucket = aws_s3_bucket.this.id
+
+  rule {
+    id     = "expire-noncurrent-30d"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.this]
+}

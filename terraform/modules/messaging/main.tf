@@ -6,12 +6,28 @@ resource "aws_sns_topic" "unified" {
   name = "${var.prefix}-events-unified"
 }
 
+# Dead-letter queue for failed standard-queue consumers (maxReceiveCount=5).
+resource "aws_sqs_queue" "standard_dlq" {
+  name                      = "${var.prefix}-standard-dlq"
+  message_retention_seconds = 1209600 # 14 days
+  sqs_managed_sse_enabled   = true
+
+  depends_on = [aws_sns_topic.unified]
+}
+
 resource "aws_sqs_queue" "standard" {
   name                       = "${var.prefix}-standard"
   message_retention_seconds  = 18400
   visibility_timeout_seconds = 560
+  # SSE-SQS with AWS-owned key (no custom KMS — LocalStack free-tier safe).
+  sqs_managed_sse_enabled = true
 
-  depends_on = [aws_sns_topic.unified]
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.standard_dlq.arn
+    maxReceiveCount     = 5
+  })
+
+  depends_on = [aws_sqs_queue.standard_dlq]
 }
 
 resource "aws_sqs_queue" "fifo" {
@@ -20,6 +36,7 @@ resource "aws_sqs_queue" "fifo" {
   content_based_deduplication = true
   message_retention_seconds   = 18400
   visibility_timeout_seconds  = 560
+  sqs_managed_sse_enabled     = true
 
   depends_on = [aws_sqs_queue.standard]
 }

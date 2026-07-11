@@ -3,8 +3,9 @@
 module "s3_app_data" {
   source = "./modules/s3-bucket"
 
-  bucket = "${var.project_name}-app-data-${var.environment_slug}"
-  tags   = local.tags
+  bucket             = "${var.project_name}-app-data-${var.environment_slug}"
+  versioning_enabled = true
+  tags               = local.tags
 }
 
 module "s3_ec2_backend" {
@@ -23,6 +24,9 @@ module "secrets" {
 }
 
 locals {
+  # Scoped to the EC2 backend log group (not "*") for least privilege.
+  ec2_backend_log_group_arn = "arn:aws:logs:*:*:log-group:cloudwatch-${var.project_name}-ec2-backend-${var.environment_slug}:*"
+
   policy_json = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -57,7 +61,7 @@ locals {
           "logs:DescribeLogStreams",
           "logs:DescribeLogGroups"
         ]
-        Resource = ["*"]
+        Resource = [local.ec2_backend_log_group_arn]
       }
     ]
   })
