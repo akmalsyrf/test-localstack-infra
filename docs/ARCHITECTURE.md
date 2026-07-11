@@ -23,7 +23,7 @@ flowchart TD
                  │  (host kubectl / TF k8s)          │
                  └─────────────────┬─────────────────┘
                                    ▼
-                         Terraform CLI (local tfstate)
+                         Terraform CLI (local tfstate by default)
               shared → network → backend → eks
                                    │
               ┌────────────────────┼────────────────────┐
@@ -32,8 +32,13 @@ flowchart TD
         :4566               (mirror)               → Kind workloads
 ```
 
-Optional: set `BACKEND=cloud` for Terraform Cloud remote state. Workspaces must use
-`execution_mode=local` — TFC agents cannot reach LocalStack, Kind, or parent-dir modules.
+State backends:
+
+- `BACKEND=local` (default) — `terraform.tfstate` on disk
+- `BACKEND=s3` — S3 bucket `tfstate-<project>-<env>` + DynamoDB lock table
+  `tflock-<project>-<env>` on LocalStack (bootstrap via `./scripts/use-s3-backend.sh`)
+- `BACKEND=cloud` — Terraform Cloud remote state; workspaces must use
+  `execution_mode=local` — TFC agents cannot reach LocalStack, Kind, or parent-dir modules
 
 ## Kind ↔ LocalStack EKS mirror
 
@@ -53,32 +58,34 @@ usual LocalStack/AWS EKS Terraform shape on **Kind** instead:
 
 | Component | Role |
 |---|---|
-| **GitHub Actions / scripts** | Orchestrates Kind + LocalStack + Terraform CLI |
+| **GitHub Actions / scripts** | Orchestrates Kind + LocalStack + Terraform CLI; static analysis (tflint/checkov) |
 | **Kind** | Real local Kubernetes (EKS stand-in) |
-| **LocalStack** | Emulates AWS APIs (S3, IAM, EC2, Lambda, API GW, SNS/SQS, **EKS**, …) |
+| **LocalStack** | Emulates AWS APIs (S3, IAM, EC2, Lambda, API GW, SNS/SQS, DynamoDB, X-Ray, …) |
 | **Terraform CLI** | Plans/applies against LocalStack + Kind |
 | **Terraform Cloud** | Optional remote state only (`BACKEND=cloud`, `execution_mode=local`) |
+| **S3+DynamoDB (LocalStack)** | Optional remote state (`BACKEND=s3`) |
 
 ## Terraform projects (per environment)
 
 ```mermaid
 flowchart LR
-  shared[shared<br/>S3, Secrets, IAM] --> network[network<br/>VPC, subnets, SG]
-  network --> backend[backend<br/>EC2, CW, SNS/SQS, Lambda, APIGW]
+  shared[shared<br/>S3, Secrets, IAM] --> network[network<br/>VPC, subnets, SG, S3 VPCE]
+  network --> backend[backend<br/>EC2, CW, SNS/SQS+DLQ, Lambda, APIGW, alarms]
   network --> eks[eks<br/>EKS cluster/nodegroup + sample app]
 ```
 
 | Project | Resources |
 |---|---|
-| **shared** | S3 buckets (+ public access block), Secrets Manager, IAM role/instance profile |
-| **network** | VPC (DNS on), 3 public + 3 private subnets, IGW, public/private RTs, SG (443 + 3000) |
-| **backend** | EC2 in private subnet, CloudWatch log group, SNS→SQS, Lambda, API Gateway |
-| **eks** | EKS-shaped IAM + Kind mirror record + sample nginx (LocalStack free: no `aws_eks_*`) |
+| **shared** | S3 (+ SSE-S3, versioning, lifecycle), Secrets Manager (recovery window), IAM role/instance profile (scoped CW logs) |
+| **network** | VPC (DNS on), 3 public + 3 private subnets, IGW, public/private RTs, **S3 Gateway VPC endpoint**, SG (443 + 3000) |
+| **backend** | EC2 (IMDSv2, encrypted EBS) in private subnet, CW log group (14d), SNS→SQS (+DLQ, SSE-SQS), Lambda (DLQ, reserved concurrency, X-Ray), API Gateway (access logs, throttle, usage plan), CW alarms → ops SNS |
+| **eks** | EKS-shaped IAM + Kind mirror record + sample nginx (2 replicas, probes, resources; LocalStack free: no `aws_eks_*`) |
 
 Cross-stack reads (backend/eks → network/shared):
 
 - **TFC mode** (`tfc_organization = "ExperimentTerraform"`): `tfe_outputs`
 - **Local mode** (`tfc_organization = ""`): `terraform_remote_state` on sibling `terraform.tfstate` files
+- **S3 mode** (`BACKEND=s3`): `terraform_remote_state` against LocalStack S3 keys `shared|network/terraform.tfstate`
 
 ## Environments
 
@@ -86,6 +93,28 @@ Cross-stack reads (backend/eks → network/shared):
 |---|---|---|---|
 | `dev` | `10.3.0.0/16` | `testinfra-dev` | `testinfra-eks-dev` |
 | `staging` | `10.1.0.0/16` | `testinfra-stg` | `testinfra-eks-staging` |
+
+## Production-readiness additions (still free-tier)
+
+Hardening that stays within LocalStack Community coverage:
+
+| Area | What we added |
+|---|---|
+| **State safety** | Opt-in `BACKEND=s3` (S3 + DynamoDB lock) via `terraform/s3-bootstrap` + `use-s3-backend.sh` |
+| **Security** | S3 SSE-AES256 + versioning + 30d noncurrent lifecycle; scoped IAM logs ARN; EC2 IMDSv2 + encrypted root; SQS SSE; Secrets recovery window 7d; CI tflint/checkov |
+| **Availability** | SQS DLQ + redrive; Lambda DLQ + reserved concurrency; EKS sample replicas=2 + resources + liveness; S3 Gateway VPC endpoint |
+| **Observability** | CW alarms (EC2 status, Lambda errors, SQS depth) → SNS ops topic; Lambda/API X-Ray; API access logs; log retention 14d |
+| **Scalability** | API GW usage plan + stage throttling; HPA documented (needs metrics-server — not installed by default) |
+
+### Still NOT production-ready (out of scope / Pro or paid)
+
+- Real multi-AZ **NAT Gateway** routing
+- Real **EKS** control plane (Kind mirror only)
+- **RDS** / ElastiCache / OpenSearch
+- **WAF**, CloudFront, Shield
+- Secrets Manager **automatic rotation** Lambda
+- Customer-managed **KMS** with full rotation policy
+- ASG + ALB self-healing (ASG APIs exist, but ALB health-check simulation is incomplete on Community — single EC2 kept)
 
 ## Apply / verify sequence
 
@@ -114,3 +143,4 @@ sequenceDiagram
 - Dummy AWS keys (`test`/`test`) are only valid inside LocalStack.
 - Kind kubeconfig lives at `.kube/kind-config` (used by Terraform kubernetes provider + verify).
 - The only secret required for optional TFC is `TF_TOKEN_app_terraform_io`.
+- Static analysis (`tflint`, `checkov`) runs before plan/apply and does not need LocalStack.

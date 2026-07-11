@@ -12,6 +12,7 @@ Git Push
    ▼
 GitHub Actions
    │
+   ├── tflint + checkov (static analysis)
    ├── Kind cluster (testinfra-eks)
    ├── LocalStack (Docker Compose)
    └── Terraform CLI (plan/apply) + local terraform.tfstate
@@ -29,7 +30,10 @@ flowchart LR
   TF --> Kind
 ```
 
-Optional: Terraform Cloud for remote state only (`BACKEND=cloud`, workspaces must be **execution_mode=local**). Org: **`ExperimentTerraform`**.
+Optional remote state:
+
+- `BACKEND=s3` — S3 + DynamoDB on LocalStack (`./scripts/use-s3-backend.sh`)
+- `BACKEND=cloud` — Terraform Cloud (`execution_mode=local`). Org: **`ExperimentTerraform`**.
 
 ## Workspace map (optional TFC)
 
@@ -50,6 +54,13 @@ chmod +x scripts/*.sh
 ./scripts/use-local-backend.sh       # default: local tfstate (no TFC remote apply)
 ./scripts/env.sh staging apply       # includes verify-apply.sh
 ./scripts/verify-apply.sh staging    # re-run checks anytime
+```
+
+### Optional: S3 + DynamoDB remote state (LocalStack)
+
+```bash
+./scripts/use-s3-backend.sh staging  # bootstrap bucket+lock table, sync BACKEND=s3
+./scripts/env.sh staging apply
 ```
 
 ### Optional: Terraform Cloud remote state
@@ -75,7 +86,7 @@ Workflow file: [`.github/workflows/terraform.yml`](.github/workflows/terraform.y
 | Doc | Contents |
 |---|---|
 | [docs/STEP_BY_STEP.md](docs/STEP_BY_STEP.md) | Local & CI apply/destroy, optional TFC, troubleshooting |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Flowcharts, Kind↔EKS mirror, component responsibilities |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Flowcharts, Kind↔EKS mirror, production-readiness notes |
 
 ## Layout
 
@@ -86,10 +97,11 @@ localstack-infra/
 ├── kind/cluster.yaml
 ├── docs/
 ├── lambda/api/
-├── scripts/          # up, kind-up/down, env, verify-apply, …
+├── scripts/          # up, kind-up/down, env, verify-apply, use-*-backend
 └── terraform/
     ├── modules/      # includes eks/
     ├── tfc-bootstrap/
+    ├── s3-bootstrap/ # BACKEND=s3 bucket + DynamoDB lock table
     └── live/
         ├── _templates/
         ├── dev/{shared,network,backend,eks}/
@@ -100,6 +112,7 @@ localstack-infra/
 
 - LocalStack endpoint: `http://localhost:4566` (dummy creds `test` / `test`)
 - Kind cluster: `testinfra-eks` (kubeconfig under `.kube/`, gitignored)
-- Default state backend is **local** (avoids TFC remote apply, which cannot reach LocalStack/Kind)
-- Not included on LocalStack free: Amplify, CloudFront, WAF, RDS, ElastiCache, OpenSearch, ECS, **EKS API** (Kind mirrors EKS instead)
+- Default state backend is **local**; opt-in `BACKEND=s3` (LocalStack) or `BACKEND=cloud` (TFC)
+- Free-tier hardening in this repo: S3 SSE/versioning/lifecycle, SQS SSE+DLQ, EC2 IMDSv2+EBS encrypt, Secrets recovery window, S3 Gateway VPC endpoint, Lambda X-Ray/DLQ/concurrency, API GW access logs+throttle, CW alarms, EKS sample HA (2 replicas)
+- **Still not included** on LocalStack free (Pro/paid or real AWS only): Amplify, CloudFront, WAF, RDS, ElastiCache, OpenSearch, ECS, real **NAT Gateway** routing, real **EKS API**, Secrets auto-rotation, customer-managed KMS rotation. Kind mirrors EKS instead of calling `aws_eks_*`.
 - If using TFC: workspaces **must** use `execution_mode = "local"`
