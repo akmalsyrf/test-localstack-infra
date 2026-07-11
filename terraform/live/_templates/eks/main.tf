@@ -1,4 +1,4 @@
-# Cross-stack inputs: network
+# Cross-stack inputs: network + backend
 # - Local: terraform_remote_state from sibling dirs
 # - Terraform Cloud: tfe_outputs from mapped workspaces
 
@@ -10,14 +10,29 @@ data "terraform_remote_state" "network" {
   }
 }
 
+data "terraform_remote_state" "backend" {
+  count   = var.tfc_organization == "" ? 1 : 0
+  backend = "local"
+  config = {
+    path = "${path.module}/../backend/terraform.tfstate"
+  }
+}
+
 data "tfe_outputs" "network" {
   count        = var.tfc_organization != "" ? 1 : 0
   organization = var.tfc_organization
   workspace    = "${var.project_name}-network-${var.environment_slug}"
 }
 
+data "tfe_outputs" "backend" {
+  count        = var.tfc_organization != "" ? 1 : 0
+  organization = var.tfc_organization
+  workspace    = "${var.project_name}-backend-${var.environment_slug}"
+}
+
 locals {
   network = var.tfc_organization == "" ? data.terraform_remote_state.network[0].outputs : data.tfe_outputs.network[0].values
+  backend = var.tfc_organization == "" ? data.terraform_remote_state.backend[0].outputs : data.tfe_outputs.backend[0].values
   # Prefer private subnets (EKS data plane); fall back to public if needed.
   eks_subnet_ids = length(local.network.private_subnet_ids) >= 2 ? slice(local.network.private_subnet_ids, 0, 2) : local.network.public_subnet_ids
   # Shared Kind cluster: unique NodePort per env (see kind/cluster.yaml mappings).
@@ -35,6 +50,12 @@ module "eks" {
   kind_context           = var.kind_context
   sample_node_port       = local.sample_node_port
   deploy_sample_workload = true
+  sns_topic_arn          = local.backend.sns_topic_arn
+  sqs_standard_queue_url = local.backend.standard_queue_url
+  sqs_fifo_queue_url     = local.backend.fifo_queue_url
+  sqs_standard_queue_arn = local.backend.standard_queue_arn
+  sqs_fifo_queue_arn     = local.backend.fifo_queue_arn
+  enable_irsa_oidc       = false
   tags                   = local.tags
 }
 
@@ -86,6 +107,22 @@ output "node_role_arn" {
   value = module.eks.node_role_arn
 }
 
+output "workload_role_arn" {
+  value = module.eks.workload_role_arn
+}
+
+output "localstack_bridge_ip" {
+  value = module.eks.localstack_bridge_ip
+}
+
+output "smoke_messaging_job" {
+  value = module.eks.smoke_messaging_job
+}
+
 output "kind_cluster_name" {
   value = "testinfra-eks"
+}
+
+output "kind_node_count" {
+  value = module.eks.kind_node_count
 }

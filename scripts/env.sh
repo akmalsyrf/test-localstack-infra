@@ -93,11 +93,19 @@ ensure_upstream_state_for_plan() {
       done
       ;;
     eks)
-      if ! stack_has_state network; then
-        echo "==> plan needs network state (terraform_remote_state); applying network first..."
-        # network may itself be fine without shared; apply network only if missing
-        apply_stack network
-      fi
+      for dep in network backend; do
+        if ! stack_has_state "$dep"; then
+          echo "==> plan needs $dep state (terraform_remote_state); applying $dep first..."
+          if [[ "$dep" == "backend" ]]; then
+            for upstream in shared network; do
+              if ! stack_has_state "$upstream"; then
+                apply_stack "$upstream"
+              fi
+            done
+          fi
+          apply_stack "$dep"
+        fi
+      done
       ;;
   esac
 }

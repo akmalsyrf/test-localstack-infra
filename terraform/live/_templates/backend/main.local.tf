@@ -170,12 +170,20 @@ output "standard_queue_url" {
   value = module.messaging.standard_queue_url
 }
 
+output "standard_queue_arn" {
+  value = module.messaging.standard_queue_arn
+}
+
 output "standard_dlq_url" {
   value = module.messaging.standard_dlq_url
 }
 
 output "fifo_queue_url" {
   value = module.messaging.fifo_queue_url
+}
+
+output "fifo_queue_arn" {
+  value = module.messaging.fifo_queue_arn
 }
 
 output "lambda_function_name" {

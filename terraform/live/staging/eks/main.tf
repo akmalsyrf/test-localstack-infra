@@ -1,4 +1,4 @@
-# EKS stack — local state only (reads sibling network terraform.tfstate).
+# EKS stack — local state only (reads sibling network + backend terraform.tfstate).
 
 data "terraform_remote_state" "network" {
   backend = "local"
@@ -7,8 +7,16 @@ data "terraform_remote_state" "network" {
   }
 }
 
+data "terraform_remote_state" "backend" {
+  backend = "local"
+  config = {
+    path = "${path.module}/../backend/terraform.tfstate"
+  }
+}
+
 locals {
   network        = data.terraform_remote_state.network.outputs
+  backend        = data.terraform_remote_state.backend.outputs
   eks_subnet_ids = length(local.network.private_subnet_ids) >= 2 ? slice(local.network.private_subnet_ids, 0, 2) : local.network.public_subnet_ids
   # Shared Kind cluster: unique NodePort per env (see kind/cluster.yaml mappings).
   sample_node_port = var.environment_slug == "dev" ? 30081 : 30080
@@ -25,7 +33,14 @@ module "eks" {
   kind_context           = var.kind_context
   sample_node_port       = local.sample_node_port
   deploy_sample_workload = true
-  tags                   = local.tags
+  sns_topic_arn          = local.backend.sns_topic_arn
+  sqs_standard_queue_url = local.backend.standard_queue_url
+  sqs_fifo_queue_url     = local.backend.fifo_queue_url
+  sqs_standard_queue_arn = local.backend.standard_queue_arn
+  sqs_fifo_queue_arn     = local.backend.fifo_queue_arn
+  # IRSA OIDC is a no-op on LocalStack Community (no real EKS API). Keep false.
+  enable_irsa_oidc = false
+  tags             = local.tags
 }
 
 output "cluster_name" {
@@ -76,6 +91,22 @@ output "node_role_arn" {
   value = module.eks.node_role_arn
 }
 
+output "workload_role_arn" {
+  value = module.eks.workload_role_arn
+}
+
+output "localstack_bridge_ip" {
+  value = module.eks.localstack_bridge_ip
+}
+
+output "smoke_messaging_job" {
+  value = module.eks.smoke_messaging_job
+}
+
 output "kind_cluster_name" {
   value = "testinfra-eks"
+}
+
+output "kind_node_count" {
+  value = module.eks.kind_node_count
 }

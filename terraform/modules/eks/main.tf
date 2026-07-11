@@ -91,6 +91,16 @@ data "external" "kind" {
   }
 }
 
+# Discover LocalStack IP on the Kind Docker network (for in-cluster Service/Endpoints).
+# Prerequisites: scripts/up.sh connected testinfra-localstack to the `kind` network.
+data "external" "localstack_network" {
+  program = ["bash", "${path.module}/scripts/localstack-network-info.sh"]
+
+  query = {
+    container_name = var.localstack_container_name
+  }
+}
+
 locals {
   kind_endpoint = data.external.kind.result.endpoint
   kind_version  = data.external.kind.result.version

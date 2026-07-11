@@ -26,18 +26,34 @@ vendor_modules() {
   local main="$dest/main.tf"
   rm -rf "$dest/modules"
   mkdir -p "$dest/modules"
-  # Copy only modules referenced by this stack's main.tf
-  local name
+  # Copy modules referenced by this stack's main.tf, then nested relative modules
+  # (e.g. modules/eks → ../iam-eks-workload).
+  local name nested
   for name in $(grep -E 'source\s*=\s*"(\.\./)+modules/[^"]+"' "$main" \
     | sed -E 's|.*modules/([^"]+)".*|\1|' | sort -u); do
     if [[ -d "$MODULES/$name" ]]; then
       cp -R "$MODULES/$name" "$dest/modules/$name"
-      # Preserve executable helpers (e.g. eks/scripts/kind-info.sh)
       find "$dest/modules/$name" -type f -name '*.sh' -exec chmod +x {} \;
     else
       echo "Missing module: $MODULES/$name" >&2
       exit 1
     fi
+    # Nested: source = "../other-module" inside vendored *.tf only
+    while IFS= read -r nested; do
+      [[ -z "$nested" ]] && continue
+      if [[ -d "$MODULES/$nested" ]]; then
+        if [[ ! -d "$dest/modules/$nested" ]]; then
+          cp -R "$MODULES/$nested" "$dest/modules/$nested"
+          find "$dest/modules/$nested" -type f -name '*.sh' -exec chmod +x {} \;
+        fi
+      else
+        echo "Missing nested module: $MODULES/$nested (from $name)" >&2
+        exit 1
+      fi
+    done < <(find "$dest/modules/$name" -type f -name '*.tf' -print0 \
+      | xargs -0 grep -hE 'source[[:space:]]*=[[:space:]]*"\.\./[A-Za-z0-9_-]+"' 2>/dev/null \
+      | sed -E 's/.*"\.\.\/([A-Za-z0-9_-]+)".*/\1/' \
+      | sort -u)
   done
   # Rewrite ../../../modules/X → ./modules/X (self-contained stack dir)
   if [[ "$(uname)" == "Darwin" ]]; then

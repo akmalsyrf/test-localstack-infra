@@ -174,8 +174,10 @@ require_out PRIVATE_IP backend private_ip
 require_out LOG_GROUP backend log_group_name
 require_out SNS_TOPIC_ARN backend sns_topic_arn
 require_out STANDARD_QUEUE_URL backend standard_queue_url
+require_out STANDARD_QUEUE_ARN backend standard_queue_arn
 require_out STANDARD_DLQ_URL backend standard_dlq_url
 require_out FIFO_QUEUE_URL backend fifo_queue_url
+require_out FIFO_QUEUE_ARN backend fifo_queue_arn
 require_out LAMBDA_NAME backend lambda_function_name
 require_out API_ID backend api_id
 require_out API_URL backend api_invoke_url
@@ -191,6 +193,10 @@ require_out EKS_SAMPLE_NS eks sample_namespace
 require_out EKS_SAMPLE_SVC eks sample_service_name
 require_out EKS_NODE_PORT eks sample_node_port
 require_out KIND_NAME eks kind_cluster_name
+require_out EKS_WORKLOAD_ROLE eks workload_role_arn
+require_out LS_BRIDGE_IP eks localstack_bridge_ip
+require_out SMOKE_JOB eks smoke_messaging_job
+require_out KIND_NODE_COUNT eks kind_node_count
 
 require_out S3_VPCE_ID network s3_vpc_endpoint_id
 
@@ -1126,6 +1132,26 @@ if [[ -f "$KIND_KUBECONFIG" ]] && command -v kubectl >/dev/null 2>&1; then
     kubectl --kubeconfig "$KIND_KUBECONFIG" get nodes -o wide >&2 || true
   fi
 
+  WORKER_NODES="$(kubectl --kubeconfig "$KIND_KUBECONFIG" get nodes \
+    -l '!node-role.kubernetes.io/control-plane' --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "${WORKER_NODES:-0}" -ge 2 ]]; then
+    ok "Kind has >=2 worker nodes (got $WORKER_NODES)"
+  else
+    fail "Kind worker count expected >=2, got ${WORKER_NODES:-0} (recreate: kind-down && kind-up)"
+  fi
+
+  if [[ "${KIND_NODE_COUNT:-0}" -ge 3 ]]; then
+    ok "eks kind_node_count output >=3 (cp+workers: $KIND_NODE_COUNT)"
+  else
+    fail "eks kind_node_count unexpected ($KIND_NODE_COUNT)"
+  fi
+
+  if kubectl --kubeconfig "$KIND_KUBECONFIG" -n kube-system get deploy metrics-server >/dev/null 2>&1; then
+    ok "metrics-server deployment present"
+  else
+    fail "metrics-server missing (HPA needs it; run kind-up.sh)"
+  fi
+
   MIRROR_CM="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n default \
     get configmap "eks-mirror-${EKS_CLUSTER_NAME}" -o jsonpath='{.data.provider}' 2>/dev/null || true)"
   if [[ "$MIRROR_CM" == "kind" ]]; then
@@ -1174,6 +1200,102 @@ sys.exit(0 if ok else 1)
     ok "sample-nginx liveness_probe present"
   else
     fail "sample-nginx liveness_probe missing"
+  fi
+
+  HAS_STARTUP="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get deploy sample-nginx -o jsonpath='{.spec.template.spec.containers[0].startupProbe.httpGet.path}' 2>/dev/null || true)"
+  if [[ "$HAS_STARTUP" == "/" ]]; then
+    ok "sample-nginx startup_probe present"
+  else
+    fail "sample-nginx startup_probe missing"
+  fi
+
+  HAS_SPREAD="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get deploy sample-nginx -o jsonpath='{.spec.template.spec.topologySpreadConstraints[0].topologyKey}' 2>/dev/null || true)"
+  if [[ "$HAS_SPREAD" == "kubernetes.io/hostname" ]]; then
+    ok "sample-nginx topology_spread_constraint on hostname"
+  else
+    fail "sample-nginx topology_spread_constraint missing"
+  fi
+
+  if kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" get pdb sample-nginx >/dev/null 2>&1; then
+    ok "PodDisruptionBudget sample-nginx exists"
+  else
+    fail "PodDisruptionBudget sample-nginx missing"
+  fi
+
+  if kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" get resourcequota app-quota >/dev/null 2>&1; then
+    ok "ResourceQuota app-quota exists"
+  else
+    fail "ResourceQuota app-quota missing"
+  fi
+
+  if kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" get limitrange app-limits >/dev/null 2>&1; then
+    ok "LimitRange app-limits exists"
+  else
+    fail "LimitRange app-limits missing"
+  fi
+
+  if kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" get hpa sample-nginx >/dev/null 2>&1; then
+    ok "HPA sample-nginx exists"
+  else
+    fail "HPA sample-nginx missing"
+  fi
+
+  # LocalStack bridge Service + Endpoints
+  LS_SVC_IP="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get svc localstack -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  if [[ "$LS_SVC_IP" == "None" ]]; then
+    ok "localstack headless Service exists"
+  else
+    fail "localstack headless Service missing or not headless (clusterIP=${LS_SVC_IP:-empty})"
+  fi
+
+  LS_EP_IP="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get endpoints localstack -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)"
+  if [[ -n "$LS_EP_IP" && "$LS_EP_IP" == "$LS_BRIDGE_IP" ]]; then
+    ok "localstack Endpoints IP matches bridge output ($LS_EP_IP)"
+  else
+    fail "localstack Endpoints IP mismatch (ep=${LS_EP_IP:-empty} bridge=${LS_BRIDGE_IP:-empty})"
+  fi
+
+  if kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" get sa workload >/dev/null 2>&1; then
+    ok "ServiceAccount workload exists"
+  else
+    fail "ServiceAccount workload missing"
+  fi
+
+  SA_ROLE="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get sa workload -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}' 2>/dev/null || true)"
+  if [[ -n "$SA_ROLE" && "$SA_ROLE" == "$EKS_WORKLOAD_ROLE" ]]; then
+    ok "ServiceAccount IRSA annotation matches workload role"
+  else
+    fail "ServiceAccount IRSA annotation mismatch"
+  fi
+
+  if kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" get secret localstack-creds >/dev/null 2>&1; then
+    ok "LOCAL-ONLY Secret localstack-creds exists"
+  else
+    fail "Secret localstack-creds missing"
+  fi
+
+  WORKLOAD_ROLE_NAME="${EXPECT_PREFIX}-eks-workload"
+  if aws_ls iam get-role --role-name "$WORKLOAD_ROLE_NAME" >/dev/null 2>&1; then
+    ok "EKS workload IAM role exists ($WORKLOAD_ROLE_NAME)"
+  else
+    fail "EKS workload IAM role missing ($WORKLOAD_ROLE_NAME)"
+  fi
+
+  # smoke-test-messaging Job must be Complete
+  JOB_STATUS="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get job smoke-test-messaging -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
+  JOB_FAILED="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get job smoke-test-messaging -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
+  if [[ "$JOB_STATUS" == "True" && "$JOB_FAILED" != "True" ]]; then
+    ok "smoke-test-messaging Job Complete"
+  else
+    fail "smoke-test-messaging Job not Complete (Complete=$JOB_STATUS Failed=$JOB_FAILED)"
+    kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" logs job/smoke-test-messaging --tail=40 >&2 || true
   fi
 
   SVC_PORT="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \

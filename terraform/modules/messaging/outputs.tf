@@ -25,3 +25,7 @@ output "standard_dlq_arn" {
 output "fifo_queue_url" {
   value = aws_sqs_queue.fifo.url
 }
+
+output "fifo_queue_arn" {
+  value = aws_sqs_queue.fifo.arn
+}
