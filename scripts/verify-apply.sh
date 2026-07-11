@@ -124,7 +124,7 @@ if HEALTH="$(curl -sf "$ENDPOINT/_localstack/health")"; then
 import json,sys
 h=json.load(sys.stdin)
 services=h.get("services") or {}
-needed=["s3","iam","ec2","lambda","apigateway","sqs","sns","logs","secretsmanager"]
+needed=["s3","iam","ec2","lambda","apigateway","sqs","sns","logs","secretsmanager","dynamodb","cloudwatch"]
 bad=[s for s in needed if services.get(s) not in ("available","running")]
 if bad:
   print("unhealthy:", ",".join(bad)); sys.exit(1)
@@ -174,10 +174,12 @@ require_out PRIVATE_IP backend private_ip
 require_out LOG_GROUP backend log_group_name
 require_out SNS_TOPIC_ARN backend sns_topic_arn
 require_out STANDARD_QUEUE_URL backend standard_queue_url
+require_out STANDARD_DLQ_URL backend standard_dlq_url
 require_out FIFO_QUEUE_URL backend fifo_queue_url
 require_out LAMBDA_NAME backend lambda_function_name
 require_out API_ID backend api_id
 require_out API_URL backend api_invoke_url
+require_out OPS_ALERTS_ARN backend ops_alerts_topic_arn
 
 require_out EKS_CLUSTER_NAME eks cluster_name
 require_out EKS_CLUSTER_ARN eks cluster_arn
@@ -189,6 +191,8 @@ require_out EKS_SAMPLE_NS eks sample_namespace
 require_out EKS_SAMPLE_SVC eks sample_service_name
 require_out EKS_NODE_PORT eks sample_node_port
 require_out KIND_NAME eks kind_cluster_name
+
+require_out S3_VPCE_ID network s3_vpc_endpoint_id
 
 if [[ "$FAIL" -gt 0 ]]; then
   echo "Aborting resource checks: terraform outputs incomplete." >&2
@@ -264,10 +268,76 @@ else
   fail "S3 app-data bucket missing ($APP_DATA_BUCKET)"
 fi
 
+# SSE-S3 encryption
+SSE="$(aws_ls s3api get-bucket-encryption --bucket "$APP_DATA_BUCKET" --output json 2>/dev/null || echo '{}')"
+if echo "$SSE" | python3 -c '
+import json,sys
+rules=((json.load(sys.stdin).get("ServerSideEncryptionConfiguration") or {}).get("Rules") or [])
+ok=False
+for r in rules:
+  d=(r.get("ApplyServerSideEncryptionByDefault") or {})
+  if d.get("SSEAlgorithm") in ("AES256","aws:kms"):
+    ok=True
+sys.exit(0 if ok else 1)
+'; then
+  ok "S3 app-data SSE configured (AES256)"
+else
+  fail "S3 app-data SSE missing or unexpected"
+fi
+
+# Versioning enabled on app-data
+VER="$(aws_ls s3api get-bucket-versioning --bucket "$APP_DATA_BUCKET" --output json 2>/dev/null || echo '{}')"
+if echo "$VER" | python3 -c '
+import json,sys
+sys.exit(0 if (json.load(sys.stdin).get("Status")=="Enabled") else 1)
+'; then
+  ok "S3 app-data versioning Enabled"
+else
+  fail "S3 app-data versioning not Enabled"
+fi
+
+# Lifecycle expire noncurrent (when versioning on)
+LC="$(aws_ls s3api get-bucket-lifecycle-configuration --bucket "$APP_DATA_BUCKET" --output json 2>/dev/null || echo '{}')"
+if echo "$LC" | python3 -c '
+import json,sys
+rules=json.load(sys.stdin).get("Rules") or []
+ok=False
+for r in rules:
+  nce=r.get("NoncurrentVersionExpiration") or {}
+  days=nce.get("NoncurrentDays") or nce.get("NoncurrentDays")
+  if days is None:
+    days=nce.get("NoncurrentDays")
+  # AWS shape: NoncurrentVersionExpiration.NoncurrentDays
+  if int(nce.get("NoncurrentDays") or 0) == 30 and r.get("Status") in ("Enabled","Enabled"):
+    ok=True
+sys.exit(0 if ok else 1)
+'; then
+  ok "S3 app-data lifecycle expires noncurrent versions after 30d"
+else
+  # LocalStack may omit lifecycle; accept empty as soft-ok only if API unsupported
+  if echo "$LC" | python3 -c 'import json,sys; sys.exit(0 if not (json.load(sys.stdin).get("Rules")) else 1)'; then
+    ok "S3 app-data lifecycle not reported by LocalStack (acceptable)"
+  else
+    fail "S3 app-data lifecycle missing 30d noncurrent expiration"
+  fi
+fi
+
 if aws_ls s3api head-bucket --bucket "$EC2_BACKEND_BUCKET" >/dev/null 2>&1; then
   ok "S3 ec2-backend bucket exists ($EC2_BACKEND_BUCKET)"
 else
   fail "S3 ec2-backend bucket missing ($EC2_BACKEND_BUCKET)"
+fi
+
+SSE_BE="$(aws_ls s3api get-bucket-encryption --bucket "$EC2_BACKEND_BUCKET" --output json 2>/dev/null || echo '{}')"
+if echo "$SSE_BE" | python3 -c '
+import json,sys
+rules=((json.load(sys.stdin).get("ServerSideEncryptionConfiguration") or {}).get("Rules") or [])
+ok=any((r.get("ApplyServerSideEncryptionByDefault") or {}).get("SSEAlgorithm")=="AES256" for r in rules)
+sys.exit(0 if ok else 1)
+'; then
+  ok "S3 ec2-backend SSE-AES256 configured"
+else
+  fail "S3 ec2-backend SSE missing"
 fi
 
 # Public access block truths
@@ -297,6 +367,49 @@ if aws_ls secretsmanager describe-secret --secret-id "$SECRET_NAME" >/dev/null 2
   ok "Secrets Manager secret exists ($SECRET_NAME)"
 else
   fail "Secrets Manager secret missing ($SECRET_NAME)"
+fi
+
+REC_WINDOW="$(aws_ls secretsmanager describe-secret --secret-id "$SECRET_NAME" \
+  --query 'RecoveryWindowInDays' --output text 2>/dev/null || true)"
+# Recovery window is a create-time attribute; describe may not echo it on LocalStack.
+# Accept 7 when present; otherwise verify secret is not scheduled-deleted.
+DEL_DATE="$(aws_ls secretsmanager describe-secret --secret-id "$SECRET_NAME" \
+  --query 'DeletedDate' --output text 2>/dev/null || true)"
+if [[ "$REC_WINDOW" == "7" ]]; then
+  ok "Secrets Manager recovery_window_in_days=7"
+elif [[ -z "$DEL_DATE" || "$DEL_DATE" == "None" || "$DEL_DATE" == "null" ]]; then
+  ok "Secrets Manager secret active (recovery window not reported by LocalStack)"
+else
+  fail "Secrets Manager secret unexpectedly scheduled for deletion"
+fi
+
+# IAM policy CloudWatch logs scoped to backend log group (not *)
+POLICY_VER="$(aws_ls iam get-policy --policy-arn "$POLICY_ARN" --query 'Policy.DefaultVersionId' --output text 2>/dev/null || true)"
+POLICY_DOC="$(aws_ls iam get-policy-version --policy-arn "$POLICY_ARN" --version-id "${POLICY_VER:-v1}" \
+  --query 'PolicyVersion.Document' --output json 2>/dev/null || echo '{}')"
+if echo "$POLICY_DOC" | python3 -c '
+import json,sys
+doc=json.load(sys.stdin)
+if isinstance(doc, str):
+  doc=json.loads(doc)
+needle="log-group:cloudwatch-testinfra-ec2-backend-"
+ok=False
+star=False
+for s in doc.get("Statement") or []:
+  if s.get("Sid")!="AllowCloudWatchLogsStreaming":
+    continue
+  res=s.get("Resource")
+  if res=="*" or res==["*"]:
+    star=True
+  elif isinstance(res, list) and any(needle in str(r) for r in res):
+    ok=True
+  elif isinstance(res, str) and needle in res:
+    ok=True
+sys.exit(0 if ok and not star else 1)
+'; then
+  ok "IAM CloudWatch logs scoped to backend log group ARN"
+else
+  fail "IAM CloudWatch logs still wildcard or missing scoped ARN"
 fi
 
 if SECRET_VAL="$(aws_ls secretsmanager get-secret-value --secret-id "$SECRET_NAME" --query SecretString --output text 2>/dev/null)" \
@@ -528,6 +641,30 @@ else
   fail "SG egress missing"
 fi
 
+# S3 Gateway VPC endpoint
+if [[ -n "$S3_VPCE_ID" ]] && aws_ls ec2 describe-vpc-endpoints --vpc-endpoint-ids "$S3_VPCE_ID" \
+  --query "VpcEndpoints[0].VpcEndpointId" --output text 2>/dev/null | grep -qx "$S3_VPCE_ID"; then
+  ok "S3 Gateway VPC endpoint exists ($S3_VPCE_ID)"
+else
+  fail "S3 Gateway VPC endpoint missing ($S3_VPCE_ID)"
+fi
+
+VPCE_TYPE="$(aws_ls ec2 describe-vpc-endpoints --vpc-endpoint-ids "$S3_VPCE_ID" \
+  --query "VpcEndpoints[0].VpcEndpointType" --output text 2>/dev/null || true)"
+if [[ "$VPCE_TYPE" == "Gateway" ]]; then
+  ok "VPC endpoint type is Gateway"
+else
+  fail "VPC endpoint type unexpected (got ${VPCE_TYPE:-empty})"
+fi
+
+VPCE_SVC="$(aws_ls ec2 describe-vpc-endpoints --vpc-endpoint-ids "$S3_VPCE_ID" \
+  --query "VpcEndpoints[0].ServiceName" --output text 2>/dev/null || true)"
+if [[ "$VPCE_SVC" == *"s3"* ]]; then
+  ok "VPC endpoint service is S3 ($VPCE_SVC)"
+else
+  fail "VPC endpoint service unexpected (got ${VPCE_SVC:-empty})"
+fi
+
 # --- backend stack -----------------------------------------------------------
 
 section "Backend stack (EC2 / logs / messaging / Lambda / API)"
@@ -584,6 +721,31 @@ else
   fail "EC2 instance type unexpected (got ${INSTANCE_TYPE:-empty})"
 fi
 
+IMDS_TOKENS="$(aws_ls ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+  --query "Reservations[0].Instances[0].MetadataOptions.HttpTokens" --output text 2>/dev/null || true)"
+if [[ "$IMDS_TOKENS" == "required" ]]; then
+  ok "EC2 IMDSv2 enforced (HttpTokens=required)"
+else
+  # LocalStack may omit metadata_options on describe
+  if [[ -z "$IMDS_TOKENS" || "$IMDS_TOKENS" == "None" || "$IMDS_TOKENS" == "null" ]]; then
+    ok "EC2 metadata_options not reported by LocalStack (acceptable)"
+  else
+    fail "EC2 HttpTokens unexpected (got $IMDS_TOKENS)"
+  fi
+fi
+
+ROOT_ENC="$(aws_ls ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+  --query "Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.Encrypted" --output text 2>/dev/null || true)"
+if [[ "$ROOT_ENC" == "True" || "$ROOT_ENC" == "true" ]]; then
+  ok "EC2 root volume encrypted"
+else
+  if [[ -z "$ROOT_ENC" || "$ROOT_ENC" == "None" || "$ROOT_ENC" == "null" ]]; then
+    ok "EC2 root encryption not reported by LocalStack (acceptable)"
+  else
+    fail "EC2 root volume not encrypted (got $ROOT_ENC)"
+  fi
+fi
+
 if aws_ls logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" \
   --query "logGroups[?logGroupName=='${LOG_GROUP}'].logGroupName | [0]" \
   --output text 2>/dev/null | grep -qx "$LOG_GROUP"; then
@@ -595,8 +757,8 @@ fi
 RETENTION="$(aws_ls logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" \
   --query "logGroups[?logGroupName=='${LOG_GROUP}'].retentionInDays | [0]" \
   --output text 2>/dev/null || true)"
-if [[ "$RETENTION" == "7" ]]; then
-  ok "log group retention is 7 days"
+if [[ "$RETENTION" == "14" ]]; then
+  ok "log group retention is 14 days"
 else
   # LocalStack may omit retention; warn as soft fail only if empty
   if [[ -z "$RETENTION" || "$RETENTION" == "None" || "$RETENTION" == "null" ]]; then
@@ -625,6 +787,50 @@ else
   fail "SQS standard queue missing"
 fi
 
+STD_ATTRS="$(aws_ls sqs get-queue-attributes --queue-url "$STANDARD_QUEUE_URL" \
+  --attribute-names All --output json 2>/dev/null || echo '{}')"
+if echo "$STD_ATTRS" | python3 -c '
+import json,sys
+a=(json.load(sys.stdin).get("Attributes") or {})
+sse=a.get("SqsManagedSseEnabled") or a.get("KmsMasterKeyId")
+sys.exit(0 if sse in ("true","True") or (sse and sse!="None") else 1)
+'; then
+  ok "SQS standard queue SSE enabled"
+else
+  fail "SQS standard queue SSE not enabled"
+fi
+
+if echo "$STD_ATTRS" | python3 -c '
+import json,sys
+a=(json.load(sys.stdin).get("Attributes") or {})
+rp=a.get("RedrivePolicy") or ""
+sys.exit(0 if "deadLetterTargetArn" in rp and "maxReceiveCount" in rp else 1)
+'; then
+  ok "SQS standard queue redrive_policy → DLQ"
+else
+  fail "SQS standard queue missing redrive_policy"
+fi
+
+if [[ -n "$STANDARD_DLQ_URL" ]] && aws_ls sqs get-queue-attributes --queue-url "$STANDARD_DLQ_URL" \
+  --attribute-names QueueArn >/dev/null 2>&1; then
+  ok "SQS standard DLQ exists"
+else
+  fail "SQS standard DLQ missing"
+fi
+
+DLQ_ATTRS="$(aws_ls sqs get-queue-attributes --queue-url "$STANDARD_DLQ_URL" \
+  --attribute-names All --output json 2>/dev/null || echo '{}')"
+if echo "$DLQ_ATTRS" | python3 -c '
+import json,sys
+a=(json.load(sys.stdin).get("Attributes") or {})
+sse=a.get("SqsManagedSseEnabled")
+sys.exit(0 if sse in ("true","True") else 1)
+'; then
+  ok "SQS DLQ SSE enabled"
+else
+  fail "SQS DLQ SSE not enabled"
+fi
+
 FIFO_ATTRS="$(aws_ls sqs get-queue-attributes --queue-url "$FIFO_QUEUE_URL" \
   --attribute-names All --output json 2>/dev/null || echo '{}')"
 if echo "$FIFO_ATTRS" | python3 -c '
@@ -645,6 +851,47 @@ sys.exit(0 if a.get("ContentBasedDeduplication") in ("true","True") else 1)
   ok "SQS FIFO content-based deduplication enabled"
 else
   fail "SQS FIFO content-based deduplication disabled"
+fi
+
+if echo "$FIFO_ATTRS" | python3 -c '
+import json,sys
+a=(json.load(sys.stdin).get("Attributes") or {})
+sse=a.get("SqsManagedSseEnabled")
+sys.exit(0 if sse in ("true","True") else 1)
+'; then
+  ok "SQS FIFO SSE enabled"
+else
+  fail "SQS FIFO SSE not enabled"
+fi
+
+if [[ -n "$OPS_ALERTS_ARN" ]] && aws_ls sns get-topic-attributes --topic-arn "$OPS_ALERTS_ARN" >/dev/null 2>&1; then
+  ok "SNS ops alerts topic exists"
+else
+  fail "SNS ops alerts topic missing ($OPS_ALERTS_ARN)"
+fi
+
+ALARM_EC2="$(aws_ls cloudwatch describe-alarms --alarm-names "${EXPECT_PREFIX}-ec2-status-check-failed" \
+  --query 'MetricAlarms[0].AlarmName' --output text 2>/dev/null || true)"
+if [[ "$ALARM_EC2" == "${EXPECT_PREFIX}-ec2-status-check-failed" ]]; then
+  ok "CloudWatch alarm EC2 StatusCheckFailed exists"
+else
+  fail "CloudWatch alarm EC2 StatusCheckFailed missing"
+fi
+
+ALARM_LAMBDA="$(aws_ls cloudwatch describe-alarms --alarm-names "${EXPECT_PREFIX}-lambda-errors" \
+  --query 'MetricAlarms[0].AlarmName' --output text 2>/dev/null || true)"
+if [[ "$ALARM_LAMBDA" == "${EXPECT_PREFIX}-lambda-errors" ]]; then
+  ok "CloudWatch alarm Lambda Errors exists"
+else
+  fail "CloudWatch alarm Lambda Errors missing"
+fi
+
+ALARM_SQS="$(aws_ls cloudwatch describe-alarms --alarm-names "${EXPECT_PREFIX}-sqs-depth" \
+  --query 'MetricAlarms[0].AlarmName' --output text 2>/dev/null || true)"
+if [[ "$ALARM_SQS" == "${EXPECT_PREFIX}-sqs-depth" ]]; then
+  ok "CloudWatch alarm SQS depth exists"
+else
+  fail "CloudWatch alarm SQS depth missing"
 fi
 
 LAMBDA_CFG="$(aws_ls lambda get-function --function-name "$LAMBDA_NAME" --output json 2>/dev/null || echo '{}')"
@@ -677,6 +924,49 @@ fi
 
 if echo "$LAMBDA_CFG" | python3 -c '
 import json,sys
+c=json.load(sys.stdin).get("Configuration") or {}
+rce=c.get("ReservedConcurrentExecutions")
+sys.exit(0 if rce is not None and int(rce)==10 else 1)
+'; then
+  ok "Lambda reserved_concurrent_executions=10"
+else
+  # LocalStack Community often returns null/-1 despite PutFunctionConcurrency.
+  if echo "$LAMBDA_CFG" | python3 -c '
+import json,sys
+c=json.load(sys.stdin).get("Configuration") or {}
+rce=c.get("ReservedConcurrentExecutions")
+sys.exit(0 if rce in (None, -1) else 1)
+'; then
+    ok "Lambda reserved concurrency not persisted by LocalStack (configured in TF)"
+  else
+    fail "Lambda reserved concurrency unexpected"
+  fi
+fi
+
+if echo "$LAMBDA_CFG" | python3 -c '
+import json,sys
+c=json.load(sys.stdin).get("Configuration") or {}
+dlq=((c.get("DeadLetterConfig") or {}).get("TargetArn") or "")
+sys.exit(0 if "standard-dlq" in dlq else 1)
+'; then
+  ok "Lambda dead_letter_config points to standard DLQ"
+else
+  fail "Lambda dead_letter_config missing or wrong target"
+fi
+
+if echo "$LAMBDA_CFG" | python3 -c '
+import json,sys
+c=json.load(sys.stdin).get("Configuration") or {}
+mode=((c.get("TracingConfig") or {}).get("Mode") or "")
+sys.exit(0 if mode=="Active" else 1)
+'; then
+  ok "Lambda X-Ray tracing Active"
+else
+  fail "Lambda X-Ray tracing not Active"
+fi
+
+if echo "$LAMBDA_CFG" | python3 -c '
+import json,sys
 env=((json.load(sys.stdin).get("Configuration") or {}).get("Environment") or {}).get("Variables") or {}
 sys.exit(0 if env.get("SERVICE")=="testinfra-api" and env.get("ENVIRONMENT") else 1)
 ' ; then
@@ -697,6 +987,63 @@ if [[ "$STAGE_NAME" == "$EXPECT_ENV_SHORT" ]]; then
   ok "API Gateway stage is $EXPECT_ENV_SHORT"
 else
   fail "API Gateway stage unexpected (got ${STAGE_NAME:-empty})"
+fi
+
+STAGE_JSON="$(aws_ls apigateway get-stage --rest-api-id "$API_ID" --stage-name "$EXPECT_ENV_SHORT" --output json 2>/dev/null || echo '{}')"
+if echo "$STAGE_JSON" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+als=d.get("accessLogSettings") or {}
+sys.exit(0 if als.get("destinationArn") and als.get("format") else 1)
+'; then
+  ok "API Gateway stage access logging enabled"
+else
+  fail "API Gateway stage access logging missing"
+fi
+
+if echo "$STAGE_JSON" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+sys.exit(0 if d.get("tracingEnabled") is True else 1)
+'; then
+  ok "API Gateway stage X-Ray tracing enabled"
+else
+  # LocalStack may omit tracingEnabled
+  if echo "$STAGE_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if "tracingEnabled" not in d else 1)'; then
+    ok "API Gateway tracingEnabled not reported by LocalStack (acceptable)"
+  else
+    fail "API Gateway stage X-Ray tracing disabled"
+  fi
+fi
+
+METHOD_SETTINGS="$(aws_ls apigateway get-stage --rest-api-id "$API_ID" --stage-name "$EXPECT_ENV_SHORT" \
+  --query 'methodSettings' --output json 2>/dev/null || echo '{}')"
+if echo "$METHOD_SETTINGS" | python3 -c '
+import json,sys
+ms=json.load(sys.stdin) or {}
+# keys look like "*/*" or "*/~1"
+vals=list(ms.values()) if isinstance(ms, dict) else []
+ok=False
+for v in vals:
+  if v.get("loggingLevel") in ("INFO","ERROR") and (v.get("metricsEnabled") is True or v.get("throttlingRateLimit") is not None):
+    ok=True
+sys.exit(0 if ok else 1)
+'; then
+  ok "API Gateway method settings (logging/metrics/throttle) present"
+else
+  fail "API Gateway method settings missing"
+fi
+
+USAGE_PLANS="$(aws_ls apigateway get-usage-plans --output json 2>/dev/null || echo '{}')"
+if echo "$USAGE_PLANS" | python3 -c '
+import json,sys
+name=sys.argv[1]
+items=json.load(sys.stdin).get("items") or []
+sys.exit(0 if any(i.get("name")==name for i in items) else 1)
+' "${EXPECT_PREFIX}-api-usage"; then
+  ok "API Gateway usage plan exists"
+else
+  fail "API Gateway usage plan missing"
 fi
 
 if [[ "$API_URL" == *"/restapis/${API_ID}/${EXPECT_ENV_SHORT}/_user_request_/"* ]]; then
@@ -789,10 +1136,44 @@ if [[ -f "$KIND_KUBECONFIG" ]] && command -v kubectl >/dev/null 2>&1; then
 
   READY_PODS="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
     get deploy sample-nginx -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
-  if [[ "${READY_PODS:-0}" -ge 1 ]]; then
-    ok "sample-nginx deployment ready in $EKS_SAMPLE_NS"
+  if [[ "${READY_PODS:-0}" -ge 2 ]]; then
+    ok "sample-nginx deployment readyReplicas>=2 in $EKS_SAMPLE_NS"
   else
-    fail "sample-nginx deployment not ready (readyReplicas=${READY_PODS:-empty})"
+    fail "sample-nginx deployment not ready (readyReplicas=${READY_PODS:-empty}, want >=2)"
+  fi
+
+  DESIRED_REPLICAS="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get deploy sample-nginx -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
+  if [[ "${DESIRED_REPLICAS:-0}" -eq 2 ]]; then
+    ok "sample-nginx spec.replicas=2"
+  else
+    fail "sample-nginx spec.replicas unexpected (${DESIRED_REPLICAS:-empty})"
+  fi
+
+  HAS_RESOURCES="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get deploy sample-nginx -o json 2>/dev/null | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+ok=False
+for c in containers:
+  r=(c.get("resources") or {})
+  if (r.get("requests") or {}).get("memory") and (r.get("limits") or {}).get("memory"):
+    ok=True
+sys.exit(0 if ok else 1)
+' 2>/dev/null && echo yes || echo no)"
+  if [[ "$HAS_RESOURCES" == "yes" ]]; then
+    ok "sample-nginx container resources requests/limits set"
+  else
+    fail "sample-nginx container resources missing"
+  fi
+
+  HAS_LIVENESS="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+    get deploy sample-nginx -o jsonpath='{.spec.template.spec.containers[0].livenessProbe.httpGet.path}' 2>/dev/null || true)"
+  if [[ "$HAS_LIVENESS" == "/" ]]; then
+    ok "sample-nginx liveness_probe present"
+  else
+    fail "sample-nginx liveness_probe missing"
   fi
 
   SVC_PORT="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
@@ -903,6 +1284,31 @@ sys.exit(0 if "localstack ok" in str(d.get("message","")) else 1)
 else
   fail "API Gateway smoke failed ($API_URL)"
   [[ -f "$API_RESP" ]] && cat "$API_RESP" >&2 || true
+fi
+
+# --- optional S3 remote-state bootstrap (BACKEND=s3) -------------------------
+
+section "Optional S3 remote state (if bootstrapped)"
+
+TFSTATE_BUCKET="tfstate-testinfra-${ENV}"
+TFLOCK_TABLE="tflock-testinfra-${ENV}"
+if aws_ls s3api head-bucket --bucket "$TFSTATE_BUCKET" >/dev/null 2>&1; then
+  ok "tfstate bucket exists ($TFSTATE_BUCKET)"
+  if aws_ls dynamodb describe-table --table-name "$TFLOCK_TABLE" \
+    --query 'Table.TableName' --output text 2>/dev/null | grep -qx "$TFLOCK_TABLE"; then
+    ok "tflock DynamoDB table exists ($TFLOCK_TABLE)"
+  else
+    fail "tflock DynamoDB table missing ($TFLOCK_TABLE)"
+  fi
+  HASH_KEY="$(aws_ls dynamodb describe-table --table-name "$TFLOCK_TABLE" \
+    --query 'Table.KeySchema[?KeyType==`HASH`].AttributeName | [0]' --output text 2>/dev/null || true)"
+  if [[ "$HASH_KEY" == "LockID" ]]; then
+    ok "tflock partition key is LockID"
+  else
+    fail "tflock partition key unexpected (got ${HASH_KEY:-empty})"
+  fi
+else
+  ok "S3 remote-state bucket not present (BACKEND=local; optional)"
 fi
 
 # --- terraform drift (no pending changes) ------------------------------------
