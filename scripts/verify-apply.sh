@@ -119,8 +119,21 @@ echo "Expected prefix:     $EXPECT_PREFIX"
 echo "Expected VPC CIDR:   $EXPECT_VPC_CIDR"
 
 section "LocalStack health"
-if HEALTH="$(curl -sf "$ENDPOINT/_localstack/health")"; then
-  echo "$HEALTH" | python3 -c '
+ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+if ! HEALTH="$(curl -sf --max-time 5 "$ENDPOINT/_localstack/health")"; then
+  # Linux CI: kind-network attach can break localhost publish; try container IP.
+  LS_IP="$(docker inspect -f '{{range $n,$c := .NetworkSettings.Networks}}{{if ne $n "kind"}}{{println $c.IPAddress}}{{end}}{{end}}' "${LOCALSTACK_CONTAINER:-testinfra-localstack}" 2>/dev/null | awk 'NF{print; exit}' || true)"
+  if [[ -n "$LS_IP" ]] && HEALTH="$(curl -sf --max-time 5 "http://${LS_IP}:4566/_localstack/health")"; then
+    ENDPOINT="http://${LS_IP}:4566"
+    export LOCALSTACK_ENDPOINT="$ENDPOINT"
+    echo "Using LocalStack container IP endpoint: $ENDPOINT"
+  else
+    fail "LocalStack health endpoint unreachable"
+    echo "Cannot continue without LocalStack." >&2
+    exit 1
+  fi
+fi
+if echo "$HEALTH" | python3 -c '
 import json,sys
 h=json.load(sys.stdin)
 services=h.get("services") or {}
@@ -129,11 +142,10 @@ bad=[s for s in needed if services.get(s) not in ("available","running")]
 if bad:
   print("unhealthy:", ",".join(bad)); sys.exit(1)
 print("services ok:", ",".join(needed))
-'
+'; then
   ok "LocalStack health (required services available)"
 else
-  fail "LocalStack health endpoint unreachable"
-  echo "Cannot continue without LocalStack." >&2
+  fail "LocalStack health JSON missing required services"
   exit 1
 fi
 

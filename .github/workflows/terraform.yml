@@ -229,9 +229,16 @@ jobs:
         if: failure()
         timeout-minutes: 5
         run: |
-          echo "==> LocalStack health"
-          curl -sf http://localhost:4566/_localstack/health || true
+          echo "==> LocalStack health (localhost)"
+          curl -sf --max-time 3 http://localhost:4566/_localstack/health || echo "(localhost failed)"
           echo
+          LS_IP="$(docker inspect -f '{{range $n,$c := .NetworkSettings.Networks}}{{if ne $n "kind"}}{{println $c.IPAddress}}{{end}}{{end}}' testinfra-localstack 2>/dev/null | awk 'NF{print; exit}')"
+          echo "==> LocalStack health (container IP ${LS_IP:-none})"
+          if [ -n "$LS_IP" ]; then
+            curl -sf --max-time 3 "http://${LS_IP}:4566/_localstack/health" || echo "(container IP failed)"
+          fi
+          echo
+          echo "==> LOCALSTACK_ENDPOINT=${LOCALSTACK_ENDPOINT:-unset}"
           echo "==> Docker stats (top)"
           docker stats --no-stream || true
           echo "==> LocalStack logs (tail)"

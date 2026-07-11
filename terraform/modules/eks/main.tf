@@ -91,8 +91,9 @@ data "external" "kind" {
   }
 }
 
-# Discover how Kind pods reach LocalStack :4566 (host.docker.internal preferred;
-# see scripts/localstack-network-info.sh). Avoids attaching LS to the kind network.
+# Discover LocalStack IP on the Kind Docker network (pods → :4566).
+# Host Terraform uses TF_VAR_localstack_endpoint from scripts/env.sh (may be
+# container IP when Linux CI breaks localhost publish after network attach).
 data "external" "localstack_network" {
   program = ["bash", "${path.module}/scripts/localstack-network-info.sh"]
 

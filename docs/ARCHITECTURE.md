@@ -169,9 +169,10 @@ flowchart LR
 Only the `eks` stack needs Kind; deferring it avoids Docker/CPU contention on
 small runners (see [CI sequencing](#ci-sequencing-kind-deferred)).
 
-Bridge discovery prefers `host.docker.internal` from the Kind node (no
-`docker network connect`). Attaching LocalStack to the `kind` network on Linux
-CI often breaks published host `:4566`.
+Bridge discovery attaches LocalStack to the Docker `kind` network and points
+Endpoints at that IP. On Linux CI that attach often breaks host `:4566` publish;
+`scripts/env.sh` then switches `TF_VAR_localstack_endpoint` to LocalStack's
+compose-network IP so Terraform keeps working.
 
 **IRSA-forward-compatible pattern**
 

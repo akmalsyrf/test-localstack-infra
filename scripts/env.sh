@@ -48,6 +48,77 @@ filter_stacks() {
 filter_stacks "$STACK_FILTER"
 echo "==> Stacks: ${STACKS[*]}"
 
+LS_CONTAINER="${LOCALSTACK_CONTAINER:-testinfra-localstack}"
+KIND_DOCKER_NETWORK="${KIND_DOCKER_NETWORK:-kind}"
+
+includes_stack() {
+  local needle="$1"
+  local s
+  for s in "${STACKS[@]}"; do
+    [[ "$s" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+# On Linux CI, attaching LocalStack to the Kind network often breaks host :4566
+# publish. Prefer localhost when it works; otherwise talk to the container IP
+# on a non-kind Docker network (reachable from the GitHub runner host).
+ensure_localstack_endpoint() {
+  local preferred="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+  local ip="" endpoint=""
+
+  if curl -sf --max-time 3 "${preferred}/_localstack/health" >/dev/null 2>&1; then
+    endpoint="$preferred"
+  elif docker inspect "$LS_CONTAINER" >/dev/null 2>&1; then
+    ip="$(docker inspect -f '{{range $n,$c := .NetworkSettings.Networks}}{{if ne $n "kind"}}{{println $c.IPAddress}}{{end}}{{end}}' "$LS_CONTAINER" 2>/dev/null | awk 'NF{print; exit}')"
+    if [[ -z "$ip" ]]; then
+      ip="$(docker inspect -f "{{ (index .NetworkSettings.Networks \"${KIND_DOCKER_NETWORK}\").IPAddress }}" "$LS_CONTAINER" 2>/dev/null || true)"
+    fi
+    if [[ -n "$ip" && "$ip" != "<no value>" ]]; then
+      endpoint="http://${ip}:4566"
+      if ! curl -sf --max-time 3 "${endpoint}/_localstack/health" >/dev/null 2>&1; then
+        endpoint=""
+      fi
+    fi
+  fi
+
+  if [[ -z "$endpoint" ]]; then
+    echo "LocalStack unreachable (tried $preferred and container IP)." >&2
+    docker compose ps 2>/dev/null || true
+    exit 1
+  fi
+
+  export LOCALSTACK_ENDPOINT="$endpoint"
+  export TF_VAR_localstack_endpoint="$endpoint"
+  if [[ "$endpoint" == "$preferred" ]]; then
+    echo "==> LocalStack endpoint: $endpoint"
+  else
+    echo "==> Host :4566 publish broken; LocalStack via container IP: $endpoint"
+  fi
+  # Persist for later CI steps (verify-apply, latency checks).
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    {
+      echo "LOCALSTACK_ENDPOINT=$endpoint"
+      echo "TF_VAR_localstack_endpoint=$endpoint"
+    } >> "$GITHUB_ENV"
+  fi
+}
+
+# Attach LocalStack to Kind *before* terraform apply so data.external does not
+# race IAM creates and break localhost mid-apply on Linux CI.
+prepare_kind_localstack_bridge() {
+  if ! includes_stack eks; then
+    return 0
+  fi
+  if ! docker network inspect "$KIND_DOCKER_NETWORK" >/dev/null 2>&1; then
+    echo "WARNING: Docker network '$KIND_DOCKER_NETWORK' missing — start Kind before eks." >&2
+    return 0
+  fi
+  echo "==> Ensuring $LS_CONTAINER on Docker network '$KIND_DOCKER_NETWORK' (before eks)..."
+  docker network connect "$KIND_DOCKER_NETWORK" "$LS_CONTAINER" 2>/dev/null || true
+  ensure_localstack_endpoint
+}
+
 uses_tfc_cloud() {
   grep -q 'cloud {' "$LIVE/shared/versions.tf" 2>/dev/null
 }
@@ -79,7 +150,8 @@ apply_stack() {
   echo "======== APPLY: $ENV/$stack ========"
   terraform -chdir="$dir" init -input=false
 
-  if [[ "$stack" == "backend" ]]; then
+  # LocalStack + Kind on small CI runners: serialize chatty stacks.
+  if [[ "$stack" == "backend" || "$stack" == "eks" ]]; then
     parallelism=1
   fi
   terraform -chdir="$dir" apply -auto-approve -input=false -parallelism="$parallelism"
@@ -104,7 +176,7 @@ destroy_stack() {
   echo "======== DESTROY: $ENV/$stack ========"
   terraform -chdir="$dir" init -input=false
 
-  if [[ "$stack" == "backend" ]]; then
+  if [[ "$stack" == "backend" || "$stack" == "eks" ]]; then
     parallelism=1
   fi
   terraform -chdir="$dir" destroy -auto-approve -input=false -parallelism="$parallelism"
@@ -142,15 +214,6 @@ ensure_upstream_state_for_plan() {
   esac
 }
 
-includes_stack() {
-  local needle="$1"
-  local s
-  for s in "${STACKS[@]}"; do
-    [[ "$s" == "$needle" ]] && return 0
-  done
-  return 1
-}
-
 if uses_tfc_cloud; then
   if [[ -z "${TF_TOKEN_app_terraform_io:-${TFE_TOKEN:-}}" ]]; then
     echo "TFC cloud backend requires TF_TOKEN_app_terraform_io." >&2
@@ -160,13 +223,16 @@ if uses_tfc_cloud; then
   "$ROOT/scripts/ensure-tfc-local-execution.sh"
 fi
 
+ensure_localstack_endpoint
+prepare_kind_localstack_bridge
+
 if uses_s3_backend; then
   export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
   export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
   export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-southeast-3}"
   export AWS_EC2_METADATA_DISABLED=true
   BUCKET="tfstate-testinfra-${ENV}"
-  if ! aws --endpoint-url="${LOCALSTACK_ENDPOINT:-http://localhost:4566}" \
+  if ! aws --endpoint-url="${LOCALSTACK_ENDPOINT}" \
     --region "${AWS_DEFAULT_REGION}" \
     s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
     echo "S3 backend bucket missing ($BUCKET). Run: ./scripts/use-s3-backend.sh $ENV" >&2
