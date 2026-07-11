@@ -78,6 +78,8 @@ jobs:
         run: |
           chmod +x scripts/*.sh
           ./scripts/sync-live.sh
+          ./scripts/ensure-tfc-local-execution.sh
+          ./scripts/assert-tfc-local-execution.sh
 
       - name: Package Lambda
         run: |
@@ -112,7 +114,8 @@ jobs:
             local stack="$1"
             local dir="${LIVE}/${stack}"
             echo "::group::${ACTION} ${ENVIRONMENT}/${stack}"
-            terraform -chdir="$dir" init -input=false
+            # -reconfigure picks up workspace execution-mode changes (remote → local)
+            terraform -chdir="$dir" init -input=false -reconfigure
             case "$ACTION" in
               plan)
                 terraform -chdir="$dir" plan -input=false -no-color

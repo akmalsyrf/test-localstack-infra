@@ -42,6 +42,15 @@ Expected `workspace_map`:
 
 Verify in the TFC UI that each workspace shows **Execution mode: Local**.
 
+If a workspace was auto-created by `terraform init` before bootstrap (default is **remote**), fix it:
+
+```bash
+export TF_TOKEN_app_terraform_io="..."
+./scripts/ensure-tfc-local-execution.sh
+# or re-apply bootstrap:
+cd terraform/tfc-bootstrap && terraform apply
+```
+
 ---
 
 ## B. GitHub repository secrets
@@ -176,7 +185,8 @@ cd terraform/tfc-bootstrap && terraform apply
 |---|---|
 | `Unauthorized` / TFC login errors | Set `TF_TOKEN_app_terraform_io` (Actions secret or local export) |
 | Workspace not found | Run `terraform/tfc-bootstrap` apply; check org name `ExperimentTerraform` |
-| Plan runs on TFC agents and cannot reach LocalStack | Workspace must be **Local** execution (`execution_mode = "local"`) |
+| `Preparing the remote apply...` / `Unreadable module directory ../../../modules` | Workspace is still **remote**. Run `./scripts/ensure-tfc-local-execution.sh`, confirm with `./scripts/assert-tfc-local-execution.sh`, then `terraform init -reconfigure` (or just `./scripts/env.sh staging apply`, which does all of this). UI: Execution Mode → **Local (custom)** — not "Project default". |
+| Plan runs on TFC agents and cannot reach LocalStack | Same as above — must be **Local** execution |
 | `connection refused :4566` | Start LocalStack (`./scripts/up.sh` or wait for compose health in CI) |
 | `tfe_outputs` empty | Apply `shared` and `network` first; confirm remote state sharing |
 | Backend type changed local ↔ cloud | `terraform init -reconfigure` or `-migrate-state` |

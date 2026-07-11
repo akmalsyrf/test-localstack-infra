@@ -15,6 +15,24 @@ fi
 
 LIVE="$ROOT/terraform/live/$ENV"
 STACKS=(shared network backend)
+APP_NAME="${APP_NAME:-testinfra}"
+
+uses_tfc_cloud() {
+  grep -q 'cloud {' "$LIVE/shared/versions.tf" 2>/dev/null
+}
+
+if uses_tfc_cloud; then
+  if [[ -z "${TF_TOKEN_app_terraform_io:-${TFE_TOKEN:-}}" ]]; then
+    echo "TFC cloud backend requires TF_TOKEN_app_terraform_io (or TFE_TOKEN)." >&2
+    exit 1
+  fi
+  echo "==> Enforcing TFC execution_mode=local (required for LocalStack + relative modules)"
+  "$ROOT/scripts/ensure-tfc-local-execution.sh"
+  "$ROOT/scripts/assert-tfc-local-execution.sh" \
+    "${APP_NAME}-shared-${ENV}" \
+    "${APP_NAME}-network-${ENV}" \
+    "${APP_NAME}-backend-${ENV}"
+fi
 
 echo "==> Packaging Lambda zip..."
 mkdir -p "$ROOT/lambda/api"
@@ -27,7 +45,8 @@ run_stack() {
   label="$(echo "$ACTION" | tr '[:lower:]' '[:upper:]')"
   echo ""
   echo "======== ${label}: $ENV/$stack ========"
-  terraform -chdir="$dir" init -input=false
+  # -reconfigure picks up workspace execution-mode changes (remote → local)
+  terraform -chdir="$dir" init -input=false -reconfigure
   case "$ACTION" in
     apply)   terraform -chdir="$dir" apply -auto-approve -input=false ;;
     destroy) terraform -chdir="$dir" destroy -auto-approve -input=false ;;

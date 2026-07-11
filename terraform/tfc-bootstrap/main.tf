@@ -4,7 +4,7 @@ terraform {
   required_providers {
     tfe = {
       source  = "hashicorp/tfe"
-      version = "~> 0.58"
+      version = ">= 0.74.0, < 1.0.0"
     }
   }
 
@@ -71,31 +71,48 @@ locals {
 }
 
 # State lives in TFC; plan/apply run in GitHub Actions or on a laptop (local execution).
+# Do NOT set working_directory for VCS remote runs — relative module paths
+# (../../../modules) only resolve when Terraform runs locally with the full repo.
 resource "tfe_workspace" "this" {
   for_each = { for w in local.workspaces : w.key => w }
 
-  name              = each.value.name
-  organization      = var.organization
-  project_id        = each.value.project_id
-  working_directory = "terraform/live/${each.value.env}/${each.value.project}"
-  queue_all_runs    = false
-  auto_apply        = false
-  speculative_enabled = true
+  name           = each.value.name
+  organization   = var.organization
+  project_id     = each.value.project_id
+  queue_all_runs = false
+  auto_apply     = false
+
+  # Speculative plans from the UI/VCS are useless here (LocalStack is not reachable
+  # from TFC agents). Keep CLI-driven local runs only.
+  speculative_enabled = false
+  file_triggers_enabled = false
 
   tag_names = [
     "app:${var.project_name}",
     "project:${each.value.project}",
     "env:${each.value.env}",
     "org:${var.organization}",
+    "execution:local",
   ]
 }
 
+# Explicit overwrite of org/project default (usually remote). Without this,
+# terraform init + cloud {} can auto-create workspaces that run remotely and
+# fail with: Unreadable module directory ../../../modules
 resource "tfe_workspace_settings" "this" {
   for_each = tfe_workspace.this
 
   workspace_id        = each.value.id
   execution_mode      = "local"
   global_remote_state = true
+}
+
+# Project-level default so newly created / UI-reset workspaces inherit local.
+resource "tfe_project_settings" "this" {
+  for_each = local.projects
+
+  project_id             = each.value
+  default_execution_mode = "local"
 }
 
 output "organization" {
