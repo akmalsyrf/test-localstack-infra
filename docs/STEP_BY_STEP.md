@@ -71,7 +71,9 @@ If you see `Preparing the remote apply...`, run `./scripts/ensure-tfc-local-exec
 
 ## GitHub Actions
 
-Default `BACKEND=local`. PRs → plan staging; push to main → apply staging.
+Default `BACKEND=local`. PRs → **plan** staging (applies upstream stacks first so
+`terraform_remote_state` can resolve on a fresh runner); push to main → **apply** staging.
+
 
 CI starts **Kind + LocalStack** via `./scripts/up.sh`, then runs Terraform.
 

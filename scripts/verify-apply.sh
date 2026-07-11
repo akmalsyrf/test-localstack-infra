@@ -771,10 +771,12 @@ else
 fi
 
 if [[ -f "$KIND_KUBECONFIG" ]] && command -v kubectl >/dev/null 2>&1; then
-  if kubectl --kubeconfig "$KIND_KUBECONFIG" get nodes --no-headers 2>/dev/null | grep -q Ready; then
+  if kubectl --kubeconfig "$KIND_KUBECONFIG" get nodes --no-headers 2>/dev/null \
+    | awk '$2 == "Ready" { ok=1 } END { exit ok ? 0 : 1 }'; then
     ok "Kind nodes are Ready"
   else
     fail "Kind nodes not Ready"
+    kubectl --kubeconfig "$KIND_KUBECONFIG" get nodes -o wide >&2 || true
   fi
 
   MIRROR_CM="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n default \

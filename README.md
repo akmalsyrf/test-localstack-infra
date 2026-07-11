@@ -64,7 +64,7 @@ If you see `Preparing the remote apply...`, the workspace is still **remote** �
 
 ## GitHub Actions
 
-1. Push to `main` → plan+apply **staging**; PRs → **plan** only
+1. Push to `main` → plan+apply **staging**; PRs → **plan** only (applies upstream stacks first so sibling `terraform_remote_state` works on a fresh runner)
 2. Manual runs: **Actions → Terraform LocalStack → Run workflow**
 3. Optional TFC: set secret `TF_TOKEN_app_terraform_io` and change workflow `BACKEND` to `cloud`
 
