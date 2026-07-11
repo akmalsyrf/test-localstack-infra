@@ -175,8 +175,44 @@ jobs:
         run: |
           chmod +x scripts/*.sh
           ./scripts/kind-up.sh
-          # Bridge LocalStack onto the Kind Docker network for in-cluster SQS/SNS.
+
+          # Kind create (3 nodes) often OOMs/starves LocalStack on small runners.
+          # Also: docker network connect can briefly break published :4566.
+          # Bring LocalStack back, wait for health, then bridge onto `kind`.
+          if ! curl -sf --max-time 3 http://localhost:4566/_localstack/health >/dev/null; then
+            echo "LocalStack unreachable after Kind create — restarting compose..."
+            docker compose up -d
+          fi
+          for i in $(seq 1 60); do
+            if curl -sf --max-time 3 http://localhost:4566/_localstack/health >/dev/null; then
+              echo "LocalStack healthy again."
+              break
+            fi
+            if [[ "$i" -eq 60 ]]; then
+              echo "::error::LocalStack did not recover after Kind start"
+              docker compose ps || true
+              docker compose logs --tail=80 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
           docker network connect kind testinfra-localstack 2>/dev/null || true
+          # Re-check after network connect (published ports can flap).
+          for i in $(seq 1 30); do
+            curl -sf --max-time 3 http://localhost:4566/_localstack/health >/dev/null && break
+            if [[ "$i" -eq 30 ]]; then
+              echo "Health still flapping after network connect — restarting LocalStack once..."
+              docker compose restart localstack
+              sleep 5
+            fi
+            sleep 2
+          done
+          if ! curl -sf --max-time 5 http://localhost:4566/_localstack/health >/dev/null; then
+            echo "::error::LocalStack still unreachable after kind network connect"
+            exit 1
+          fi
+
           LS_IP="$(docker inspect -f '{{ (index .NetworkSettings.Networks "kind").IPAddress }}' testinfra-localstack 2>/dev/null || true)"
           echo "LocalStack on kind network: ${LS_IP:-unknown}"
           kind get clusters

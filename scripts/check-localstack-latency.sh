@@ -13,8 +13,18 @@ export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
 export AWS_DEFAULT_REGION="$REGION"
 export AWS_EC2_METADATA_DISABLED=true
 
-if ! curl -sf --max-time 5 "$ENDPOINT/_localstack/health" >/dev/null; then
+# Brief retry: Kind create / docker network connect can flap :4566 for a few seconds.
+HEALTH_OK=0
+for _ in $(seq 1 30); do
+  if curl -sf --max-time 3 "$ENDPOINT/_localstack/health" >/dev/null; then
+    HEALTH_OK=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$HEALTH_OK" -ne 1 ]]; then
   echo "::error::LocalStack health endpoint unreachable at $ENDPOINT" >&2
+  docker compose ps 2>/dev/null || true
   exit 1
 fi
 
