@@ -1,5 +1,4 @@
-# Backend stack — Terraform Cloud remote state + tfe_outputs for cross-stack reads.
-# Workspace name is injected by scripts/sync-live.sh
+# Optional local-only backend for the backend stack (no Terraform Cloud).
 
 terraform {
   required_version = ">= 1.5.0"
@@ -15,13 +14,7 @@ terraform {
     }
   }
 
-  cloud {
-    organization = "ExperimentTerraform"
-
-    workspaces {
-      name = "testinfra-backend-staging"
-    }
-  }
+  backend "local" {}
 }
 
 provider "aws" {
@@ -49,5 +42,4 @@ provider "aws" {
   }
 }
 
-# Reads outputs from testinfra-shared-* and testinfra-network-* workspaces
 provider "tfe" {}

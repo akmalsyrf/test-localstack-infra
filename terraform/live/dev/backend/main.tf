@@ -64,18 +64,18 @@ resource "aws_instance" "backend" {
 }
 
 module "messaging" {
-  source = "../../../modules/messaging"
+  source = "./modules/messaging"
 
   prefix = local.prefix
   tags   = local.tags
 }
 
 module "lambda_api" {
-  source = "../../../modules/lambda-api"
+  source = "./modules/lambda-api"
 
   prefix          = local.prefix
   stage_name      = var.environment
-  lambda_zip_path = "${path.module}/../../../../lambda/api/function.zip"
+  lambda_zip_path = "${path.module}/lambda/function.zip"
   environment_variables = {
     SERVICE     = "${var.project_name}-api"
     ENVIRONMENT = var.environment

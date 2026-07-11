@@ -15,3 +15,6 @@ override.tf.json
 lambda/**/*.zip
 .env
 terraform/tfc-bootstrap/terraform.tfvars
+# Vendored by scripts/sync-live.sh (do not commit)
+terraform/live/**/modules/
+terraform/live/**/lambda/

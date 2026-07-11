@@ -1,7 +1,7 @@
 # Network: VPC + security group for EC2 backend
 
 module "network" {
-  source = "../../../modules/network"
+  source = "./modules/network"
 
   project_name    = var.project_name
   environment     = var.environment
@@ -10,7 +10,7 @@ module "network" {
 }
 
 module "sg_ec2_backend" {
-  source = "../../../modules/security-group"
+  source = "./modules/security-group"
 
   name                = "sg_${var.project_name}_ec2_backend_${var.environment_slug}"
   description         = "Security group for EC2 backend (${var.environment_slug})"

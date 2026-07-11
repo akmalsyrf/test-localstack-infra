@@ -1,21 +1,21 @@
 # Shared / platform resources: S3, Secrets, IAM
 
 module "s3_app_data" {
-  source = "../../../modules/s3-bucket"
+  source = "./modules/s3-bucket"
 
   bucket = "${var.project_name}-app-data-${var.environment_slug}"
   tags   = local.tags
 }
 
 module "s3_ec2_backend" {
-  source = "../../../modules/s3-bucket"
+  source = "./modules/s3-bucket"
 
   bucket = "${var.project_name}-ec2-backend-${var.environment_slug}"
   tags   = local.tags
 }
 
 module "secrets" {
-  source = "../../../modules/secrets"
+  source = "./modules/secrets"
 
   prefix      = local.prefix
   secret_name = "${var.project_name}/app/api/env/${var.environment}"
@@ -64,7 +64,7 @@ locals {
 }
 
 module "iam_ec2_backend" {
-  source = "../../../modules/iam-ec2-backend"
+  source = "./modules/iam-ec2-backend"
 
   role_name   = "role-${var.project_name}-session-manager-be-${var.environment_slug}"
   policy_name = "policy-${var.project_name}-ec2-backend-${var.environment_slug}"

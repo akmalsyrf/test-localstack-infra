@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Fail fast if any testinfra TFC workspace is still on remote execution.
-# Usage: ./scripts/assert-tfc-local-execution.sh [workspace-name ...]
+# Fail unless every listed workspace has execution-mode exactly "local".
 set -euo pipefail
 
 ORG="${TFC_ORG:-ExperimentTerraform}"
@@ -34,25 +33,26 @@ for name in "${WORKSPACES[@]}"; do
     "${API}/organizations/${ORG}/workspaces/${name}" || true)"
 
   if ! echo "$resp" | python3 -c 'import json,sys; json.load(sys.stdin)["data"]["id"]' >/dev/null 2>&1; then
-    echo "WARN  workspace not found: $name"
+    echo "BAD   workspace not found: $name" >&2
+    bad=$((bad + 1))
     continue
   fi
 
   mode="$(echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["attributes"].get("execution-mode") or "")')"
-  ops="$(echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["attributes"].get("operations"))')"
-
-  if [[ "$mode" == "local" ]] || [[ "$ops" == "False" || "$ops" == "false" ]]; then
-    echo "OK    $name execution-mode=$mode"
+  # Strict: only "local" is acceptable. Do not trust legacy operations=false alone.
+  if [[ "$mode" == "local" ]]; then
+    echo "OK    $name execution-mode=local"
   else
-    echo "BAD   $name execution-mode=$mode (need local)" >&2
+    echo "BAD   $name execution-mode=${mode:-empty} (need local)" >&2
     bad=$((bad + 1))
   fi
 done
 
 if [[ "$bad" -gt 0 ]]; then
   echo "" >&2
-  echo "Refusing to continue: $bad workspace(s) still use remote execution." >&2
+  echo "Refusing to continue: $bad workspace(s) are not local." >&2
   echo "Run: ./scripts/ensure-tfc-local-execution.sh" >&2
-  echo "Then: terraform -chdir=<stack> init" >&2
+  echo "Or use LocalStack-safe local state:" >&2
+  echo "  BACKEND=local ./scripts/sync-live.sh && ./scripts/env.sh <env> apply" >&2
   exit 1
 fi

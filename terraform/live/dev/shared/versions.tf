@@ -1,5 +1,5 @@
-# Shared / network stacks — Terraform Cloud remote state, local execution.
-# Workspace name is injected by scripts/sync-live.sh
+# Optional local-only backend (no Terraform Cloud).
+# Use: BACKEND=local ./scripts/sync-live.sh
 
 terraform {
   required_version = ">= 1.5.0"
@@ -11,13 +11,7 @@ terraform {
     }
   }
 
-  cloud {
-    organization = "ExperimentTerraform"
-
-    workspaces {
-      name = "testinfra-shared-dev"
-    }
-  }
+  backend "local" {}
 }
 
 provider "aws" {

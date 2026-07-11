@@ -2,7 +2,7 @@
 
 Sample infrastructure on **LocalStack (free)** with Terraform, split into **shared / network / backend** projects and **dev / staging** environments.
 
-**CI architecture**
+**CI architecture (default)**
 
 ```
 Git Push
@@ -11,19 +11,15 @@ Git Push
 GitHub Actions
    │
    ├── Start LocalStack (Docker Compose on the runner)
-   └── Terraform CLI (plan/apply)
-           │
-           ▼
-    Terraform Cloud
-    (remote state only, execution_mode=local)
+   └── Terraform CLI (plan/apply) + local terraform.tfstate
            │
            ▼
       LocalStack (:4566 on the job network — not exposed to the internet)
 ```
 
-Terraform Cloud organization: **`ExperimentTerraform`**
+Optional: Terraform Cloud for remote state only (`BACKEND=cloud`, workspaces must be **execution_mode=local**). Org: **`ExperimentTerraform`**.
 
-## Workspace map
+## Workspace map (optional TFC)
 
 | TFC project | Workspace (dev) | Workspace (staging) |
 |---|---|---|
@@ -33,29 +29,31 @@ Terraform Cloud organization: **`ExperimentTerraform`**
 
 Apply order per environment: **shared → network → backend**
 
-## Quick start (local)
+## Quick start (recommended)
 
 ```bash
 chmod +x scripts/*.sh
 ./scripts/up.sh
-
-# Optional: local state only (no TFC)
-BACKEND=local ./scripts/sync-live.sh
-./scripts/env.sh staging apply          # includes verify-apply.sh
-
-# Default: Terraform Cloud remote state (needs token)
-export TF_TOKEN_app_terraform_io="..."   # add later as a GitHub secret too
-./scripts/use-tfc-backend.sh             # org ExperimentTerraform
-./scripts/env.sh staging apply
+./scripts/use-local-backend.sh           # default: local tfstate (no TFC remote apply)
+./scripts/env.sh staging apply           # includes verify-apply.sh
 ./scripts/verify-apply.sh staging        # re-run checks anytime
 ```
 
+### Optional: Terraform Cloud remote state
+
+```bash
+export TF_TOKEN_app_terraform_io="..."
+./scripts/use-tfc-backend.sh             # enforces execution_mode=local
+./scripts/env.sh staging apply
+```
+
+If you see `Preparing the remote apply...`, the workspace is still **remote** — run `./scripts/ensure-tfc-local-execution.sh` or switch back with `./scripts/use-local-backend.sh`.
+
 ## GitHub Actions
 
-1. Create TFC workspaces (once): see [docs/STEP_BY_STEP.md](docs/STEP_BY_STEP.md)
-2. Add repository secret **`TF_TOKEN_app_terraform_io`**
-3. Push to `main` → plan+apply **staging**; PRs → **plan** only
-4. Manual runs: **Actions → Terraform LocalStack → Run workflow**
+1. Push to `main` → plan+apply **staging**; PRs → **plan** only
+2. Manual runs: **Actions → Terraform LocalStack → Run workflow**
+3. Optional TFC: set secret `TF_TOKEN_app_terraform_io` and change workflow `BACKEND` to `cloud`
 
 Workflow file: [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml)
 
@@ -63,7 +61,7 @@ Workflow file: [`.github/workflows/terraform.yml`](.github/workflows/terraform.y
 
 | Doc | Contents |
 |---|---|
-| [docs/STEP_BY_STEP.md](docs/STEP_BY_STEP.md) | Bootstrap TFC, local & CI apply/destroy, secrets, troubleshooting |
+| [docs/STEP_BY_STEP.md](docs/STEP_BY_STEP.md) | Local & CI apply/destroy, optional TFC, troubleshooting |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Diagram and component responsibilities |
 
 ## Layout
@@ -77,7 +75,7 @@ localstack-infra/
 ├── scripts/
 └── terraform/
     ├── modules/
-    ├── tfc-bootstrap/          # creates TFC projects + workspaces
+    ├── tfc-bootstrap/          # optional: creates TFC projects + workspaces
     └── live/
         ├── _templates/
         ├── dev/{shared,network,backend}/
@@ -87,5 +85,6 @@ localstack-infra/
 ## Notes
 
 - LocalStack endpoint: `http://localhost:4566` (dummy creds `test` / `test`)
+- Default state backend is **local** (avoids TFC remote apply, which cannot reach LocalStack)
 - Not included on LocalStack free: Amplify, CloudFront, WAF, RDS, ElastiCache, OpenSearch, ECS
-- TFC workspaces **must** use `execution_mode = "local"` so runs happen in Actions/your laptop, not on TFC agents
+- If using TFC: workspaces **must** use `execution_mode = "local"`

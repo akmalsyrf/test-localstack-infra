@@ -2,7 +2,8 @@ name: Terraform LocalStack
 
 # Architecture:
 #   Git push → GitHub Actions → LocalStack (Docker) + Terraform CLI
-#                            → Terraform Cloud (remote state only, execution_mode=local)
+#                            → local terraform.tfstate (default; reliable with LocalStack)
+#                            → optional Terraform Cloud (set BACKEND=cloud + secret; execution_mode=local)
 #                            → LocalStack APIs (localhost:4566, not exposed publicly)
 
 on:
@@ -40,7 +41,7 @@ env:
   AWS_SECRET_ACCESS_KEY: test
   AWS_DEFAULT_REGION: ap-southeast-3
   TFC_ORG: ExperimentTerraform
-  BACKEND: cloud
+  BACKEND: local
 
 jobs:
   terraform:
@@ -54,10 +55,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Require Terraform Cloud token
+      - name: Require TFC token when BACKEND=cloud
         run: |
-          if [ -z "${TF_TOKEN_app_terraform_io}" ]; then
-            echo "::error::Add repository secret TF_TOKEN_app_terraform_io (TFC user/team token)."
+          if [ "${BACKEND}" = "cloud" ] && [ -z "${TF_TOKEN_app_terraform_io}" ]; then
+            echo "::error::BACKEND=cloud requires repository secret TF_TOKEN_app_terraform_io."
             exit 1
           fi
 
@@ -74,18 +75,6 @@ jobs:
           terraform_version: "1.5.7"
           terraform_wrapper: false
 
-      - name: Sync live stacks (TFC cloud backend)
-        run: |
-          chmod +x scripts/*.sh
-          ./scripts/sync-live.sh
-          ./scripts/ensure-tfc-local-execution.sh
-          ./scripts/assert-tfc-local-execution.sh
-
-      - name: Package Lambda
-        run: |
-          mkdir -p lambda/api
-          (cd lambda/api && zip -q -j function.zip handler.py)
-
       - name: Resolve environment & action
         id: meta
         run: |
@@ -96,65 +85,14 @@ jobs:
             echo "environment=staging" >> "$GITHUB_OUTPUT"
             echo "action=plan" >> "$GITHUB_OUTPUT"
           else
-            # push to main → plan+apply staging by default
             echo "environment=staging" >> "$GITHUB_OUTPUT"
             echo "action=apply" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Terraform init / plan / apply
-        env:
-          ENVIRONMENT: ${{ steps.meta.outputs.environment }}
-          ACTION: ${{ steps.meta.outputs.action }}
-        run: |
-          set -euo pipefail
-          LIVE="terraform/live/${ENVIRONMENT}"
-          STACKS=(shared network backend)
-
-          run_one() {
-            local stack="$1"
-            local dir="${LIVE}/${stack}"
-            echo "::group::${ACTION} ${ENVIRONMENT}/${stack}"
-            # Do not pass -reconfigure with terraform { cloud {} } — Terraform rejects it.
-            terraform -chdir="$dir" init -input=false
-            case "$ACTION" in
-              plan)
-                terraform -chdir="$dir" plan -input=false -no-color
-                ;;
-              apply)
-                terraform -chdir="$dir" apply -auto-approve -input=false -no-color
-                ;;
-              destroy)
-                terraform -chdir="$dir" destroy -auto-approve -input=false -no-color
-                ;;
-              *)
-                echo "Unknown action: $ACTION" >&2
-                exit 1
-                ;;
-            esac
-            echo "::endgroup::"
-          }
-
-          if [ "$ACTION" = "destroy" ]; then
-            for ((i=${#STACKS[@]}-1; i>=0; i--)); do
-              run_one "${STACKS[$i]}"
-            done
-          else
-            for stack in "${STACKS[@]}"; do
-              run_one "$stack"
-            done
-          fi
-
-          if [ "$ACTION" = "apply" ]; then
-            echo "::group::Outputs"
-            terraform -chdir="${LIVE}/backend" output -no-color || true
-            echo "::endgroup::"
-          fi
-
-      - name: Verify apply (resources + functional)
-        if: steps.meta.outputs.action == 'apply'
+      - name: Terraform ${{ steps.meta.outputs.action }}
         run: |
           chmod +x scripts/*.sh
-          ./scripts/verify-apply.sh "${{ steps.meta.outputs.environment }}"
+          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" "${{ steps.meta.outputs.action }}"
 
       - name: Stop LocalStack
         if: always()

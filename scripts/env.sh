@@ -10,8 +10,8 @@ if [[ -z "$ENV" || ! -d "$ROOT/terraform/live/$ENV" ]]; then
   exit 1
 fi
 
-# Keep live dirs in sync (honors BACKEND / TFC_ORG env vars)
-"$ROOT/scripts/sync-live.sh" >/dev/null
+# Keep live dirs in sync (honors BACKEND / TFC_ORG; default BACKEND=local)
+"$ROOT/scripts/sync-live.sh"
 
 LIVE="$ROOT/terraform/live/$ENV"
 STACKS=(shared network backend)
@@ -24,29 +24,45 @@ uses_tfc_cloud() {
 if uses_tfc_cloud; then
   if [[ -z "${TF_TOKEN_app_terraform_io:-${TFE_TOKEN:-}}" ]]; then
     echo "TFC cloud backend requires TF_TOKEN_app_terraform_io (or TFE_TOKEN)." >&2
+    echo "Or switch to local state: BACKEND=local $0 $ENV $ACTION" >&2
     exit 1
   fi
-  echo "==> Enforcing TFC execution_mode=local (required for LocalStack + relative modules)"
+  echo "==> TFC cloud backend detected — enforcing local execution on all stacks"
   "$ROOT/scripts/ensure-tfc-local-execution.sh"
-  "$ROOT/scripts/assert-tfc-local-execution.sh" \
-    "${APP_NAME}-shared-${ENV}" \
-    "${APP_NAME}-network-${ENV}" \
-    "${APP_NAME}-backend-${ENV}"
 fi
 
 echo "==> Packaging Lambda zip..."
 mkdir -p "$ROOT/lambda/api"
 (cd "$ROOT/lambda/api" && zip -q -j function.zip handler.py)
+# Refresh vendored zip in backend stack
+if [[ -d "$LIVE/backend/lambda" ]]; then
+  cp "$ROOT/lambda/api/function.zip" "$LIVE/backend/lambda/function.zip"
+fi
 
 run_stack() {
   local stack="$1"
   local dir="$LIVE/$stack"
-  local label
+  local label ws
   label="$(echo "$ACTION" | tr '[:lower:]' '[:upper:]')"
+  ws="${APP_NAME}-${stack}-${ENV}"
+
   echo ""
   echo "======== ${label}: $ENV/$stack ========"
-  # Do not pass -reconfigure with terraform { cloud {} } — Terraform rejects it.
-  terraform -chdir="$dir" init -input=false
+
+  if uses_tfc_cloud; then
+    # Per-stack: force local immediately before this stack runs (backend was still remote before)
+    "$ROOT/scripts/force-workspace-local.sh" "$ws"
+  fi
+
+  # Drop stale init metadata when switching backends / execution modes
+  rm -rf "$dir/.terraform"
+
+  if uses_tfc_cloud; then
+    terraform -chdir="$dir" init -input=false
+  else
+    terraform -chdir="$dir" init -input=false -reconfigure
+  fi
+
   case "$ACTION" in
     apply)   terraform -chdir="$dir" apply -auto-approve -input=false ;;
     destroy) terraform -chdir="$dir" destroy -auto-approve -input=false ;;

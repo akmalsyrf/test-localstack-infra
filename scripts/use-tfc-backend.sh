@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Force Terraform Cloud remote state (org ExperimentTerraform by default).
-# Also forces workspace execution_mode=local when a TFC token is available.
+# Opt in to Terraform Cloud remote state (org ExperimentTerraform by default).
+# WARNING: every workspace MUST use execution_mode=local or apply runs on TFC
+# agents and fails (missing modules / cannot reach LocalStack).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export BACKEND=cloud
@@ -10,12 +11,9 @@ echo "Live stacks now use Terraform Cloud org=${TFC_ORG}."
 
 if [[ -n "${TF_TOKEN_app_terraform_io:-${TFE_TOKEN:-}}" ]]; then
   "$ROOT/scripts/ensure-tfc-local-execution.sh"
-  "$ROOT/scripts/assert-tfc-local-execution.sh"
-  echo "Export TF_TOKEN_app_terraform_io is set; workspaces verified local."
   echo "Use: ./scripts/env.sh staging apply"
+  echo "Prefer local state for LocalStack: ./scripts/use-local-backend.sh"
 else
-  echo "Export TF_TOKEN_app_terraform_io then run:"
-  echo "  ./scripts/ensure-tfc-local-execution.sh"
-  echo "  ./scripts/assert-tfc-local-execution.sh"
-  echo "Without local execution you get remote apply + missing ../../../modules."
+  echo "Export TF_TOKEN_app_terraform_io then re-run this script."
+  echo "Or use: ./scripts/use-local-backend.sh"
 fi

@@ -13,12 +13,7 @@
                  ▼                                   ▼
         docker compose up                  Terraform CLI
         (LocalStack container)             init → plan/apply
-                 │                                   │
-                 │                                   ▼
-                 │                        Terraform Cloud
-                 │                   organization: ExperimentTerraform
-                 │                   (remote state only;
-                 │                    execution_mode = local)
+                 │                         (local tfstate by default)
                  │                                   │
                  └─────────────────┬─────────────────┘
                                    ▼
@@ -27,6 +22,9 @@
                    (runner-local; not public)
 ```
 
+Optional: set `BACKEND=cloud` for Terraform Cloud remote state. Workspaces must use
+`execution_mode=local` — TFC agents cannot reach LocalStack or parent-dir modules.
+
 ## Responsibilities
 
 | Component | Role |
@@ -34,7 +32,7 @@
 | **GitHub Actions** | Orchestrates the job: starts LocalStack, runs Terraform CLI |
 | **LocalStack** | Emulates AWS APIs used by this repo (S3, IAM, EC2, Lambda, API GW, SNS/SQS, …) |
 | **Terraform CLI** | Plans and applies configuration against LocalStack |
-| **Terraform Cloud** | Stores remote state and workspace metadata only — does **not** execute plan/apply |
+| **Terraform Cloud** | Optional remote state only (`BACKEND=cloud`, `execution_mode=local`) |
 
 ## Terraform projects (per environment)
 
