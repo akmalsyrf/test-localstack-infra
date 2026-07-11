@@ -41,7 +41,7 @@ flowchart TD
                                    │
               Terraform: shared → network → backend
                                    │
-                         kind-up.sh + network connect
+                         kind-up.sh (pods use host.docker.internal → :4566)
                                    │
                          latency smoke again
                                    │
@@ -152,26 +152,26 @@ Workloads on Kind reach LocalStack SQS/SNS without LocalStack Pro or a real AWS 
 
 ```mermaid
 flowchart LR
-  up[scripts/up.sh] --> kindNet[Docker network: kind]
-  up --> ls[testinfra-localstack]
-  up -->|docker network connect| bridge[LS on kind network]
-  bridge --> discover[data.external localstack-network-info.sh]
-  discover --> ep[Endpoints localstack:4566]
+  ls[testinfra-localstack :4566 on host]
+  discover[data.external localstack-network-info.sh]
+  discover -->|host.docker.internal IPv4| ep[Endpoints localstack:4566]
   ep --> svc[headless Service localstack]
   svc --> secret[Secret localstack-creds]
   secret --> job[Job smoke-test-messaging]
-  job -->|AWS_ENDPOINT_URL| sqs[SQS / SNS on LocalStack]
+  job -->|AWS_ENDPOINT_URL| ls
 ```
 
 **Startup order:**
 
-**Local (`./scripts/up.sh`):** Kind → LocalStack → `docker network connect` → full apply.
+**Local (`./scripts/up.sh`):** Kind → LocalStack → full apply.
 
-**CI:** LocalStack alone → apply shared/network/backend → Kind + connect → apply eks.
+**CI:** LocalStack alone → apply shared/network/backend → Kind → apply eks.
 Only the `eks` stack needs Kind; deferring it avoids Docker/CPU contention on
 small runners (see [CI sequencing](#ci-sequencing-kind-deferred)).
 
-If LocalStack is not on the `kind` network before eks apply, `data.external.localstack_network` fails.
+Bridge discovery prefers `host.docker.internal` from the Kind node (no
+`docker network connect`). Attaching LocalStack to the `kind` network on Linux
+CI often breaks published host `:4566`.
 
 **IRSA-forward-compatible pattern**
 
@@ -198,8 +198,7 @@ sequenceDiagram
   U->>L: docker compose up (SKIP_KIND in CI)
   U->>T: apply shared / network / backend
   U->>K: kind-up.sh (CI only after early stacks)
-  U->>L: network connect kind
-  U->>T: apply eks (IAM + Kind workload)
+  U->>T: apply eks (IAM + Kind workload; bridge via host.docker.internal)
   T->>L: Create IAM roles (EKS-shaped)
   T->>K: Namespace / Deployment / Service / ConfigMap
   U->>V: naming, AWS API, Kind, functional, drift checks

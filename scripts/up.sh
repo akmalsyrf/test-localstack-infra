@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Start Kind (EKS backend) then LocalStack, then bridge Docker networks.
+# Start Kind (EKS backend) then LocalStack.
 #
-# Startup order (required for Kind↔LocalStack messaging bridge):
-#   1) Kind cluster (creates Docker network `kind`)
-#   2) LocalStack container (default compose network)
-#   3) docker network connect kind testinfra-localstack  (idempotent)
-# Terraform eks apply then discovers LocalStack's IP on `kind` via
-# modules/eks/scripts/localstack-network-info.sh.
+# Kind pods reach LocalStack via host.docker.internal → host :4566 (see
+# modules/eks/scripts/localstack-network-info.sh). We intentionally do NOT
+# `docker network connect` LocalStack onto `kind` by default — on Linux CI that
+# often breaks published :4566.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,6 +13,8 @@ cd "$ROOT"
 SKIP_KIND="${SKIP_KIND:-0}"
 LS_CONTAINER="${LOCALSTACK_CONTAINER:-testinfra-localstack}"
 KIND_DOCKER_NETWORK="${KIND_DOCKER_NETWORK:-kind}"
+# Opt-in legacy bridge (usually unnecessary).
+CONNECT_LS_TO_KIND="${CONNECT_LS_TO_KIND:-0}"
 
 if [[ "$SKIP_KIND" != "1" ]]; then
   echo "==> Ensuring Kind cluster (LocalStack EKS backend)..."
@@ -39,16 +39,10 @@ for i in $(seq 1 60); do
   if curl -sf http://localhost:4566/_localstack/health >/dev/null 2>&1; then
     echo "LocalStack is healthy."
 
-    # Bridge LocalStack onto the Kind Docker network so pods can reach :4566.
-    if [[ "$SKIP_KIND" != "1" ]] && docker network inspect "$KIND_DOCKER_NETWORK" >/dev/null 2>&1; then
-      echo "==> Connecting $LS_CONTAINER to Docker network '$KIND_DOCKER_NETWORK' (idempotent)..."
+    if [[ "$CONNECT_LS_TO_KIND" == "1" && "$SKIP_KIND" != "1" ]] \
+      && docker network inspect "$KIND_DOCKER_NETWORK" >/dev/null 2>&1; then
+      echo "==> CONNECT_LS_TO_KIND=1 — attaching $LS_CONTAINER to '$KIND_DOCKER_NETWORK'..."
       docker network connect "$KIND_DOCKER_NETWORK" "$LS_CONTAINER" 2>/dev/null || true
-      LS_IP="$(docker inspect -f "{{ (index .NetworkSettings.Networks \"${KIND_DOCKER_NETWORK}\").IPAddress }}" "$LS_CONTAINER" 2>/dev/null || true)"
-      if [[ -n "$LS_IP" && "$LS_IP" != "<no value>" ]]; then
-        echo "    LocalStack on kind network: $LS_IP"
-      else
-        echo "WARNING: could not resolve LocalStack IP on '$KIND_DOCKER_NETWORK'" >&2
-      fi
     fi
     exit 0
   fi

@@ -13,7 +13,7 @@ export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
 export AWS_DEFAULT_REGION="$REGION"
 export AWS_EC2_METADATA_DISABLED=true
 
-# Brief retry: Kind create / docker network connect can flap :4566 for a few seconds.
+# Brief retry: Kind create can briefly starve LocalStack CPU; give it a few seconds.
 HEALTH_OK=0
 for _ in $(seq 1 30); do
   if curl -sf --max-time 3 "$ENDPOINT/_localstack/health" >/dev/null; then
