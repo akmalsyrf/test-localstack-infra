@@ -1,5 +1,5 @@
 # Kind cluster backing LocalStack EKS mirror.
-# Control-plane + worker; host NodePorts for per-env sample Services.
+# Control-plane + 2 workers (synthetic zone labels for topology-spread demos).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: testinfra-eks
@@ -24,3 +24,9 @@ nodes:
     labels:
       role: worker
       tier: app
+      zone: a
+  - role: worker
+    labels:
+      role: worker
+      tier: app
+      zone: b

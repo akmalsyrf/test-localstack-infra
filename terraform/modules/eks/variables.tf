@@ -60,3 +60,50 @@ variable "kind_context" {
   type    = string
   default = "kind-testinfra-eks"
 }
+
+variable "sns_topic_arn" {
+  type        = string
+  description = "SNS topic ARN from backend stack (messaging)"
+  default     = ""
+}
+
+variable "sqs_standard_queue_url" {
+  type    = string
+  default = ""
+}
+
+variable "sqs_fifo_queue_url" {
+  type    = string
+  default = ""
+}
+
+variable "sqs_standard_queue_arn" {
+  type    = string
+  default = ""
+}
+
+variable "sqs_fifo_queue_arn" {
+  type    = string
+  default = ""
+}
+
+variable "enable_irsa_oidc" {
+  type        = bool
+  description = "Enable real EKS OIDC/IRSA trust (no-op on LocalStack Community; default false)."
+  default     = false
+}
+
+variable "oidc_provider_arn" {
+  type    = string
+  default = ""
+}
+
+variable "oidc_issuer_host" {
+  type    = string
+  default = ""
+}
+
+variable "localstack_container_name" {
+  type    = string
+  default = "testinfra-localstack"
+}

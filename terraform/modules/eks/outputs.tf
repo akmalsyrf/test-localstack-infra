@@ -57,3 +57,15 @@ output "sample_node_port" {
 output "kind_node_count" {
   value = local.kind_nodes
 }
+
+output "workload_role_arn" {
+  value = try(module.iam_workload[0].role_arn, null)
+}
+
+output "localstack_bridge_ip" {
+  value = try(data.external.localstack_network.result.ip, null)
+}
+
+output "smoke_messaging_job" {
+  value = try(kubernetes_job_v1.smoke_messaging[0].metadata[0].name, null)
+}

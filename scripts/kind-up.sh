@@ -74,6 +74,28 @@ export KUBECONFIG="$HOST_KUBECONFIG"
 echo "==> Waiting for Kind nodes Ready..."
 kubectl --kubeconfig "$HOST_KUBECONFIG" wait --for=condition=Ready nodes --all --timeout=180s
 
+# metrics-server (required for HPA). Kind needs --kubelet-insecure-tls.
+if ! kubectl --kubeconfig "$HOST_KUBECONFIG" -n kube-system get deployment metrics-server >/dev/null 2>&1; then
+  echo "==> Installing metrics-server (HPA support)..."
+  kubectl --kubeconfig "$HOST_KUBECONFIG" apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+  kubectl --kubeconfig "$HOST_KUBECONFIG" -n kube-system patch deployment metrics-server --type='json' \
+    -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+else
+  echo "==> metrics-server already present."
+fi
+
+echo "==> Waiting for metrics-server Available..."
+kubectl --kubeconfig "$HOST_KUBECONFIG" -n kube-system wait --for=condition=Available deployment/metrics-server --timeout=180s || {
+  echo "WARNING: metrics-server not Available yet (HPA may be delayed)." >&2
+}
+
+WORKER_COUNT="$(kubectl --kubeconfig "$HOST_KUBECONFIG" get nodes -l '!node-role.kubernetes.io/control-plane' --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+EXPECTED_WORKERS=2
+if [[ "$WORKER_COUNT" -lt "$EXPECTED_WORKERS" ]]; then
+  echo "WARNING: Kind has $WORKER_COUNT worker node(s); kind/cluster.yaml expects $EXPECTED_WORKERS." >&2
+  echo "         Recreate with: ./scripts/kind-down.sh && ./scripts/kind-up.sh" >&2
+fi
+
 echo "==> Kind ready."
 echo "    Host kubeconfig:       $HOST_KUBECONFIG"
 echo "    LocalStack kubeconfig: $LS_KUBECONFIG"
