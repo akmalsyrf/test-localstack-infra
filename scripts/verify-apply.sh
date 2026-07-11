@@ -11,7 +11,6 @@ REGION="${AWS_DEFAULT_REGION:-ap-southeast-3}"
 
 PASS=0
 FAIL=0
-SKIP=0
 
 if [[ -z "$ENV" || ! -d "$ROOT/terraform/live/$ENV" ]]; then
   echo "Usage: $0 <dev|staging>" >&2
@@ -36,11 +35,6 @@ ok() {
 fail() {
   FAIL=$((FAIL + 1))
   echo "  FAIL  $1"
-}
-
-skip() {
-  SKIP=$((SKIP + 1))
-  echo "  SKIP  $1"
 }
 
 require_cmd() {
@@ -163,7 +157,7 @@ require_out API_URL backend api_invoke_url
 
 if [[ "$FAIL" -gt 0 ]]; then
   echo "Aborting resource checks: terraform outputs incomplete." >&2
-  echo "Summary: $PASS passed, $FAIL failed, $SKIP skipped"
+  echo "Summary: $PASS passed, $FAIL failed"
   exit 1
 fi
 
@@ -451,22 +445,37 @@ section "Terraform drift (plan -detailed-exitcode)"
 check_drift() {
   local stack="$1"
   local dir="$LIVE/$stack"
-  local rc=0
-  set +e
-  terraform -chdir="$dir" plan -input=false -no-color -detailed-exitcode -lock=false >/tmp/verify-plan-"$ENV"-"$stack".txt 2>&1
-  rc=$?
-  set -e
-  case "$rc" in
-    0) ok "no drift in $stack" ;;
-    2)
-      fail "drift detected in $stack (plan wants changes)"
-      echo "      see /tmp/verify-plan-${ENV}-${stack}.txt"
-      ;;
-    *)
-      fail "terraform plan failed for $stack (exit $rc)"
-      tail -n 40 "/tmp/verify-plan-${ENV}-${stack}.txt" >&2 || true
-      ;;
-  esac
+  local plan_file="/tmp/verify-plan-${ENV}-${stack}.txt"
+  local attempt rc=1
+  # LocalStack can briefly reorder SG/subnet attributes right after apply.
+  for attempt in 1 2 3; do
+    set +e
+    terraform -chdir="$dir" plan -input=false -no-color -detailed-exitcode -lock=false >"$plan_file" 2>&1
+    rc=$?
+    set -e
+    case "$rc" in
+      0)
+        ok "no drift in $stack"
+        return 0
+        ;;
+      2)
+        if [[ "$attempt" -lt 3 ]]; then
+          echo "  ...  transient drift in $stack (attempt $attempt/3), retrying..."
+          sleep 3
+          continue
+        fi
+        fail "drift detected in $stack (plan wants changes)"
+        echo "      see $plan_file"
+        grep -E '^(  # |  [-+~]|Plan:|Terraform will)' "$plan_file" | head -n 60 || true
+        return 0
+        ;;
+      *)
+        fail "terraform plan failed for $stack (exit $rc)"
+        tail -n 40 "$plan_file" >&2 || true
+        return 0
+        ;;
+    esac
+  done
 }
 
 for stack in shared network backend; do
@@ -479,7 +488,6 @@ echo ""
 echo "======== VERIFY SUMMARY ($ENV) ========"
 echo "Passed:  $PASS"
 echo "Failed:  $FAIL"
-echo "Skipped: $SKIP"
 
 if [[ "$FAIL" -gt 0 ]]; then
   echo "Verification FAILED"

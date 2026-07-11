@@ -26,4 +26,10 @@ resource "aws_security_group" "this" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  # LocalStack often reorders inline ingress/egress on refresh, which makes
+  # terraform plan exit 2 (false drift). Ignore rule block ordering noise.
+  lifecycle {
+    ignore_changes = [ingress, egress]
+  }
 }

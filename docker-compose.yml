@@ -8,7 +8,11 @@ services:
       - SERVICES=s3,iam,sts,ec2,lambda,apigateway,sqs,sns,logs,secretsmanager,ssm,cloudwatch
       - DEBUG=0
       - PERSISTENCE=0
-      # Prefer local executor so CI works without nested Docker for every invoke
+      # Legacy path URLs (http://localhost:4566/000000000000/queue) — AWS Terraform
+      # provider rejects LocalStack "path" strategy (/queue/<region>/...).
+      - SQS_ENDPOINT_STRATEGY=off
+      - DISABLE_CORS_CHECKS=1
+      - LOCALSTACK_HOST=localhost
       - LAMBDA_RUNTIME_EXECUTOR=docker
       - LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=60
       - DOCKER_HOST=unix:///var/run/docker.sock

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Force all testinfra TFC projects + workspaces to execution_mode=local, then verify.
+# Force all testinfra TFC workspaces (+ project defaults) to execution_mode=local.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ORG="${TFC_ORG:-ExperimentTerraform}"
 APP_NAME="${APP_NAME:-testinfra}"
 TOKEN="${TF_TOKEN_app_terraform_io:-${TFE_TOKEN:-}}"
@@ -13,12 +12,14 @@ if [[ -z "$TOKEN" ]]; then
   exit 1
 fi
 
-auth_hdr=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/vnd.api+json")
-api_get() { curl -sS "${auth_hdr[@]}" "$1"; }
+auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/vnd.api+json")
+
+api_get() { curl -sS "${auth[@]}" "$1"; }
+
 api_patch() {
   local url="$1" body="$2" tmp code
   tmp="$(mktemp)"
-  code="$(curl -sS -o "$tmp" -w "%{http_code}" -X PATCH "${auth_hdr[@]}" -d "$body" "$url" || true)"
+  code="$(curl -sS -o "$tmp" -w "%{http_code}" -X PATCH "${auth[@]}" -d "$body" "$url" || true)"
   if [[ "$code" != 200 && "$code" != 201 ]]; then
     echo "PATCH $url failed (HTTP $code):" >&2
     cat "$tmp" >&2 || true
@@ -29,29 +30,48 @@ api_patch() {
   rm -f "$tmp"
 }
 
-PROJECTS=(
-  "${APP_NAME}-shared"
-  "${APP_NAME}-network"
-  "${APP_NAME}-backend"
-)
+force_workspace_local() {
+  local name="$1"
+  local resp ws_id before after body
 
-WORKSPACES=(
-  "${APP_NAME}-shared-dev"
-  "${APP_NAME}-shared-staging"
-  "${APP_NAME}-network-dev"
-  "${APP_NAME}-network-staging"
-  "${APP_NAME}-backend-dev"
-  "${APP_NAME}-backend-staging"
-)
+  resp="$(api_get "${API}/organizations/${ORG}/workspaces/${name}" || true)"
+  if ! echo "$resp" | python3 -c 'import json,sys; json.load(sys.stdin)["data"]["id"]' >/dev/null 2>&1; then
+    echo "  SKIP  $name (not found)"
+    return 0
+  fi
 
-echo "======== TFC local-execution enforce ========"
-echo "Org: $ORG"
+  ws_id="$(echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+  before="$(echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["attributes"].get("execution-mode") or "")')"
+
+  body="$(python3 -c '
+import json,sys
+print(json.dumps({
+  "data": {
+    "id": sys.argv[1],
+    "type": "workspaces",
+    "attributes": {
+      "execution-mode": "local",
+      "setting-overwrites": {"execution-mode": True, "agent-pool": True}
+    }
+  }
+}))' "$ws_id")"
+
+  api_patch "${API}/workspaces/${ws_id}" "$body" >/dev/null || \
+    api_patch "${API}/organizations/${ORG}/workspaces/${name}" "$body" >/dev/null || return 1
+
+  sleep 1
+  after="$(api_get "${API}/workspaces/${ws_id}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["attributes"].get("execution-mode") or "")')"
+  if [[ "$after" != "local" ]]; then
+    echo "  FAIL  $name still execution-mode=$after (was $before)" >&2
+    return 1
+  fi
+  echo "  OK    $name execution-mode=local"
+}
+
+echo "======== TFC local-execution enforce (org=$ORG) ========"
 
 projects_json="$(api_get "${API}/organizations/${ORG}/projects?page%5Bsize%5D=100")"
-
-echo ""
-echo "==> Project defaults → local"
-for pname in "${PROJECTS[@]}"; do
+for pname in "${APP_NAME}-shared" "${APP_NAME}-network" "${APP_NAME}-backend"; do
   pid="$(echo "$projects_json" | python3 -c '
 import json,sys
 want=sys.argv[1]
@@ -59,8 +79,7 @@ for p in json.load(sys.stdin).get("data") or []:
   if p.get("attributes",{}).get("name")==want:
     print(p["id"]); break
 ' "$pname" || true)"
-  [[ -z "$pid" ]] && echo "  SKIP  $pname" && continue
-
+  [[ -z "$pid" ]] && continue
   body="$(python3 -c '
 import json,sys
 print(json.dumps({
@@ -73,34 +92,20 @@ print(json.dumps({
     }
   }
 }))' "$pid")"
-  if api_patch "${API}/projects/${pid}" "$body" >/dev/null; then
-    echo "  OK    $pname"
-  else
-    body2="$(python3 -c '
-import json,sys
-print(json.dumps({"data":{"type":"projects","id":sys.argv[1],"attributes":{"default-execution-mode":"local"}}}))
-' "$pid")"
-    api_patch "${API}/projects/${pid}" "$body2" >/dev/null && echo "  OK    $pname (fallback)" || echo "  WARN  $pname"
-  fi
+  api_patch "${API}/projects/${pid}" "$body" >/dev/null 2>&1 || true
 done
 
-echo ""
-echo "==> Workspaces → local"
 fail=0
-for name in "${WORKSPACES[@]}"; do
-  if ! "$ROOT/scripts/force-workspace-local.sh" "$name"; then
-    fail=$((fail + 1))
-  fi
+for name in \
+  "${APP_NAME}-shared-dev" "${APP_NAME}-shared-staging" \
+  "${APP_NAME}-network-dev" "${APP_NAME}-network-staging" \
+  "${APP_NAME}-backend-dev" "${APP_NAME}-backend-staging"
+do
+  force_workspace_local "$name" || fail=$((fail + 1))
 done
 
-echo ""
 if [[ "$fail" -gt 0 ]]; then
-  echo "FAILED: $fail workspace(s) still not local." >&2
-  echo "Safe alternative for LocalStack:" >&2
-  echo "  BACKEND=local ./scripts/sync-live.sh" >&2
-  echo "  ./scripts/env.sh staging apply" >&2
+  echo "FAILED: $fail workspace(s) not local. Use BACKEND=local instead." >&2
   exit 1
 fi
-
-"$ROOT/scripts/assert-tfc-local-execution.sh"
-echo "All workspaces verified local."
+echo "All workspaces are local."

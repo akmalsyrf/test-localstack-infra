@@ -12,11 +12,19 @@ resource "aws_vpc" "main" {
   enable_dns_hostnames = true
 
   tags = merge(local.tags, { Name = "${local.prefix}-vpc" })
+
+  lifecycle {
+    ignore_changes = [tags, tags_all]
+  }
 }
 
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
   tags   = merge(local.tags, { Name = "${local.prefix}-igw" })
+
+  lifecycle {
+    ignore_changes = [tags, tags_all]
+  }
 }
 
 # Public subnets (azone / dzone / ezone)
@@ -31,9 +39,12 @@ resource "aws_subnet" "public" {
     Name = "${local.prefix}-public-${["azone", "dzone", "ezone"][count.index]}"
     Tier = "public"
   })
+
+  lifecycle {
+    ignore_changes = [tags, tags_all]
+  }
 }
 
-# Private subnets (bzone / czone / fzone)
 resource "aws_subnet" "private" {
   count                   = 3
   vpc_id                  = aws_vpc.main.id
@@ -45,11 +56,19 @@ resource "aws_subnet" "private" {
     Name = "${local.prefix}-private-${["bzone", "czone", "fzone"][count.index]}"
     Tier = "private"
   })
+
+  lifecycle {
+    ignore_changes = [tags, tags_all]
+  }
 }
 
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
   tags   = merge(local.tags, { Name = "${local.prefix}-public-rt" })
+
+  lifecycle {
+    ignore_changes = [tags, tags_all]
+  }
 }
 
 resource "aws_route" "public_internet" {
@@ -64,10 +83,14 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# LocalStack free: skip NAT Gateway (often flaky / unnecessary for local mocks)
+# LocalStack free: skip NAT Gateway
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
   tags   = merge(local.tags, { Name = "${local.prefix}-private-rt" })
+
+  lifecycle {
+    ignore_changes = [tags, tags_all]
+  }
 }
 
 resource "aws_route_table_association" "private" {

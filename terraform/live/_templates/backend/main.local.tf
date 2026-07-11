@@ -52,7 +52,6 @@ module "messaging" {
   source = "../../../modules/messaging"
 
   prefix = local.prefix
-  tags   = local.tags
 }
 
 module "lambda_api" {
