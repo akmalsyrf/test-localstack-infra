@@ -74,17 +74,24 @@ jobs:
 
       - name: TFLint
         run: |
-          tflint --init || true
-          for dir in terraform/modules/* terraform/live/staging/*; do
-            [ -d "$dir" ] || continue
-            echo "==> tflint $dir"
-            tflint --chdir="$dir" --format compact || true
-          done
-          # Soft-fail style: re-run modules strictly (live is generated)
+          tflint --init
+          failed=0
           for dir in terraform/modules/*; do
             [ -d "$dir" ] || continue
-            tflint --chdir="$dir" --format compact
+            # Docs-only snippet directory (no real Terraform root module)
+            [ "$(basename "$dir")" = "_provider" ] && continue
+            echo "==> tflint $dir"
+            if ! tflint --chdir="$dir" --format compact --config "$PWD/.tflint.hcl"; then
+              failed=1
+            fi
           done
+          # Live stacks are generated; report but do not fail the job on unused shared vars noise
+          for dir in terraform/live/staging/*; do
+            [ -d "$dir" ] || continue
+            echo "==> tflint $dir (informational)"
+            tflint --chdir="$dir" --format compact --config "$PWD/.tflint.hcl" || true
+          done
+          exit "$failed"
 
       - name: Checkov
         uses: bridgecrewio/checkov-action@v12

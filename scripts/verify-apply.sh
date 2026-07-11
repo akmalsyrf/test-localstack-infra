@@ -1286,16 +1286,21 @@ sys.exit(0 if ok else 1)
     fail "EKS workload IAM role missing ($WORKLOAD_ROLE_NAME)"
   fi
 
-  # smoke-test-messaging Job must be Complete
-  JOB_STATUS="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
-    get job smoke-test-messaging -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
-  JOB_FAILED="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
-    get job smoke-test-messaging -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
-  if [[ "$JOB_STATUS" == "True" && "$JOB_FAILED" != "True" ]]; then
-    ok "smoke-test-messaging Job Complete"
+  # smoke-test-messaging Job must be Complete (Jobs are kept without TTL so
+  # verify can observe them after apply; replace_triggered_by recreates on change).
+  if kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" get job smoke-test-messaging >/dev/null 2>&1; then
+    JOB_STATUS="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+      get job smoke-test-messaging -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
+    JOB_FAILED="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \
+      get job smoke-test-messaging -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
+    if [[ "$JOB_STATUS" == "True" && "$JOB_FAILED" != "True" ]]; then
+      ok "smoke-test-messaging Job Complete"
+    else
+      fail "smoke-test-messaging Job not Complete (Complete=$JOB_STATUS Failed=$JOB_FAILED)"
+      kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" logs job/smoke-test-messaging --tail=40 >&2 || true
+    fi
   else
-    fail "smoke-test-messaging Job not Complete (Complete=$JOB_STATUS Failed=$JOB_FAILED)"
-    kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" logs job/smoke-test-messaging --tail=40 >&2 || true
+    fail "smoke-test-messaging Job missing (re-apply eks after LocalStack bridge is up)"
   fi
 
   SVC_PORT="$(kubectl --kubeconfig "$KIND_KUBECONFIG" -n "$EKS_SAMPLE_NS" \

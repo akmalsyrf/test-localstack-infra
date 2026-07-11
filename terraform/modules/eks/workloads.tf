@@ -403,8 +403,9 @@ resource "kubernetes_job_v1" "smoke_messaging" {
   }
 
   spec {
-    ttl_seconds_after_finished = 600
-    backoff_limit              = 1
+    # Keep completed Jobs around for verify-apply (TTL caused silent drift:
+    # K8s deleted the Job while Terraform state still pointed at it).
+    backoff_limit = 1
 
     template {
       metadata {
