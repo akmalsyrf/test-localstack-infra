@@ -1,0 +1,15 @@
+# Copy this over versions.tf only if you are hand-editing.
+# Prefer: ./scripts/use-tfc-backend.sh
+#
+# organization = ExperimentTerraform
+# workspace    = testinfra-{shared|network|backend}-{dev|staging}
+
+terraform {
+  cloud {
+    organization = "ExperimentTerraform"
+
+    workspaces {
+      name = "testinfra-PROJECT-ENV"
+    }
+  }
+}

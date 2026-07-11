@@ -1,0 +1,17 @@
+*.tfvars
+!*.tfvars.example
+!.github/
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.DS_Store
+lambda/**/*.zip
+.env
+terraform/tfc-bootstrap/terraform.tfvars

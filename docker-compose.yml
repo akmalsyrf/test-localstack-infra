@@ -1,0 +1,26 @@
+services:
+  localstack:
+    image: localstack/localstack:4.3
+    container_name: testinfra-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3,iam,sts,ec2,lambda,apigateway,sqs,sns,logs,secretsmanager,ssm,cloudwatch
+      - DEBUG=0
+      - PERSISTENCE=0
+      # Prefer local executor so CI works without nested Docker for every invoke
+      - LAMBDA_RUNTIME_EXECUTOR=docker
+      - LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=60
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+volumes:
+  localstack-data:

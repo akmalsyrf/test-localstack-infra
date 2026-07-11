@@ -1,0 +1,7 @@
+project_name        = "testinfra"
+environment         = "dev"
+environment_slug    = "dev"
+aws_region          = "ap-southeast-3"
+localstack_endpoint = "http://localhost:4566"
+tfc_organization    = "ExperimentTerraform"
+vpc_cidr_prefix = "10.3"
