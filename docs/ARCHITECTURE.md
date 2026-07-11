@@ -104,7 +104,7 @@ Hardening that stays within LocalStack Community coverage:
 | **Security** | S3 SSE-AES256 + versioning + 30d noncurrent lifecycle; scoped IAM logs ARN; EC2 IMDSv2 + encrypted root; SQS SSE; Secrets recovery window 7d; CI tflint/checkov |
 | **Availability** | SQS DLQ + redrive; Lambda DLQ + reserved concurrency; EKS sample replicas=2 + resources + liveness; S3 Gateway VPC endpoint |
 | **Observability** | CW alarms (EC2 status, Lambda errors, SQS depth) → SNS ops topic; Lambda/API X-Ray; API access logs; log retention 14d |
-| **Scalability** | API GW usage plan + stage throttling; HPA documented (needs metrics-server — not installed by default) |
+| **Scalability** | API GW usage plan + stage throttling; Kind metrics-server + HPA (min 2 / max 4) |
 
 ### Still NOT production-ready (out of scope / Pro or paid)
 
@@ -115,6 +115,45 @@ Hardening that stays within LocalStack Community coverage:
 - Secrets Manager **automatic rotation** Lambda
 - Customer-managed **KMS** with full rotation policy
 - ASG + ALB self-healing (ASG APIs exist, but ALB health-check simulation is incomplete on Community — single EC2 kept)
+- Real **IRSA/OIDC** validation (no EKS OIDC issuer on LocalStack Community)
+- NetworkPolicy enforcement (Kind default CNI kindnet does not enforce; Calico swap skipped for CI stability)
+
+## Kind ↔ LocalStack messaging bridge
+
+Workloads on Kind reach LocalStack SQS/SNS without LocalStack Pro or a real AWS account:
+
+```mermaid
+flowchart LR
+  up[scripts/up.sh] --> kindNet[Docker network: kind]
+  up --> ls[testinfra-localstack]
+  up -->|docker network connect| bridge[LS on kind network]
+  bridge --> discover[data.external localstack-network-info.sh]
+  discover --> ep[Endpoints localstack:4566]
+  ep --> svc[headless Service localstack]
+  svc --> secret[Secret localstack-creds]
+  secret --> job[Job smoke-test-messaging]
+  job -->|AWS_ENDPOINT_URL| sqs[SQS / SNS on LocalStack]
+```
+
+**Startup order (fragile if reversed):**
+
+1. `kind-up.sh` — creates Kind + Docker network `kind` + metrics-server  
+2. `docker compose up` — starts LocalStack  
+3. `docker network connect kind testinfra-localstack` (idempotent in `up.sh`)  
+4. `terraform apply` eks — discovers IP, creates Service/Endpoints, runs smoke Job  
+
+If LocalStack is not on the `kind` network before eks apply, `data.external.localstack_network` fails.
+
+**IRSA-forward-compatible pattern**
+
+| Piece | Today (Kind + LocalStack) | Real EKS later |
+|---|---|---|
+| `aws_iam_role` + scoped SQS/SNS policy (`iam-eks-workload`) | Created; trust is placeholder | Keep |
+| ServiceAccount annotation `eks.amazonaws.com/role-arn` | Present but inert | Keep |
+| `enable_irsa_oidc` / `oidc_provider_arn` | `false` / empty | Set to cluster OIDC |
+| Secret `localstack-creds` | **LOCAL-ONLY bypass** (`test`/`test` + `AWS_ENDPOINT_URL`) | **Delete** |
+| headless Service + Endpoints + `localstack-network-info.sh` | Bridge to Docker IP | **Delete** |
+| Job `smoke-test-messaging` | Proves SNS→SQS via bridge | Retarget to real AWS endpoints / remove |
 
 ## Apply / verify sequence
 

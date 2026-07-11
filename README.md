@@ -113,6 +113,7 @@ localstack-infra/
 - LocalStack endpoint: `http://localhost:4566` (dummy creds `test` / `test`)
 - Kind cluster: `testinfra-eks` (kubeconfig under `.kube/`, gitignored)
 - Default state backend is **local**; opt-in `BACKEND=s3` (LocalStack) or `BACKEND=cloud` (TFC)
-- Free-tier hardening in this repo: S3 SSE/versioning/lifecycle, SQS SSE+DLQ, EC2 IMDSv2+EBS encrypt, Secrets recovery window, S3 Gateway VPC endpoint, Lambda X-Ray/DLQ/concurrency, API GW access logs+throttle, CW alarms, EKS sample HA (2 replicas)
-- **Still not included** on LocalStack free (Pro/paid or real AWS only): Amplify, CloudFront, WAF, RDS, ElastiCache, OpenSearch, ECS, real **NAT Gateway** routing, real **EKS API**, Secrets auto-rotation, customer-managed KMS rotation. Kind mirrors EKS instead of calling `aws_eks_*`.
+- Free-tier hardening in this repo: S3 SSE/versioning/lifecycle, SQS SSE+DLQ, EC2 IMDSv2+EBS encrypt, Secrets recovery window, S3 Gateway VPC endpoint, Lambda X-Ray/DLQ/concurrency, API GW access logs+throttle, CW alarms, EKS sample HA (2 replicas / PDB / HPA), Kind↔LocalStack SQS/SNS bridge
+- Kind cluster: **2 workers** + metrics-server (`./scripts/kind-up.sh`). After changing `kind/cluster.yaml`, recreate with `./scripts/kind-down.sh && ./scripts/kind-up.sh`
+- **Still not included** on LocalStack free (Pro/paid or real AWS only): Amplify, CloudFront, WAF, RDS, ElastiCache, OpenSearch, ECS, real **NAT Gateway** routing, real **EKS API** / IRSA OIDC validation, Secrets auto-rotation, customer-managed KMS rotation. Kind mirrors EKS instead of calling `aws_eks_*`.
 - If using TFC: workspaces **must** use `execution_mode = "local"`
