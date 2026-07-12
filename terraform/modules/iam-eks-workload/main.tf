@@ -47,7 +47,7 @@ resource "aws_iam_role" "eks_workload" {
     ? data.aws_iam_policy_document.irsa_trust[0].json
     : data.aws_iam_policy_document.local_placeholder_trust[0].json
   )
-  tags = var.tags
+  # No tags: LocalStack IAM tag waiters can hang (same as SNS).
 }
 
 resource "aws_iam_role_policy" "messaging" {

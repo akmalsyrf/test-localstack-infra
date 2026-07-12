@@ -90,10 +90,32 @@ ensure_localstack_endpoint() {
 
   export LOCALSTACK_ENDPOINT="$endpoint"
   export TF_VAR_localstack_endpoint="$endpoint"
-  if [[ "$endpoint" == "$preferred" ]]; then
-    echo "==> LocalStack endpoint: $endpoint"
+  if [[ "$endpoint" != "http://localhost:4566" && "$endpoint" != "http://127.0.0.1:4566" ]]; then
+    echo "==> Host :4566 publish broken; using container IP for Terraform: $endpoint"
   else
-    echo "==> Host :4566 publish broken; LocalStack via container IP: $endpoint"
+    echo "==> LocalStack endpoint: $endpoint"
+  fi
+  # Keep terraform.tfvars in sync: it overrides TF_VAR_ and is written by sync-live
+  # with localhost before Kind attach can break host publish on Linux CI.
+  if [[ -d "$LIVE" ]]; then
+    local tfv stack
+    for stack in "${ALL_STACKS[@]}"; do
+      tfv="$LIVE/$stack/terraform.tfvars"
+      if [[ -f "$tfv" ]]; then
+        python3 - "$tfv" "$endpoint" <<'PY'
+import pathlib, sys
+path, ep = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = path.read_text()
+lines = []
+for line in text.splitlines(keepends=True):
+    if line.lstrip().startswith("localstack_endpoint"):
+        lines.append(f'localstack_endpoint    = "{ep}"\n')
+    else:
+        lines.append(line)
+path.write_text("".join(lines))
+PY
+      fi
+    done
   fi
   # Persist for later CI steps (verify-apply, latency checks).
   if [[ -n "${GITHUB_ENV:-}" ]]; then
@@ -148,13 +170,16 @@ apply_stack() {
 
   echo ""
   echo "======== APPLY: $ENV/$stack ========"
+  echo "    localstack_endpoint=$LOCALSTACK_ENDPOINT"
   terraform -chdir="$dir" init -input=false
 
   # LocalStack + Kind on small CI runners: serialize chatty stacks.
   if [[ "$stack" == "backend" || "$stack" == "eks" ]]; then
     parallelism=1
   fi
-  terraform -chdir="$dir" apply -auto-approve -input=false -parallelism="$parallelism"
+  # -var beats terraform.tfvars (sync-live bakes localhost before kind-attach).
+  terraform -chdir="$dir" apply -auto-approve -input=false -parallelism="$parallelism" \
+    -var="localstack_endpoint=${LOCALSTACK_ENDPOINT}"
 }
 
 plan_stack() {
@@ -163,8 +188,10 @@ plan_stack() {
 
   echo ""
   echo "======== PLAN: $ENV/$stack ========"
+  echo "    localstack_endpoint=$LOCALSTACK_ENDPOINT"
   terraform -chdir="$dir" init -input=false
-  terraform -chdir="$dir" plan -input=false
+  terraform -chdir="$dir" plan -input=false \
+    -var="localstack_endpoint=${LOCALSTACK_ENDPOINT}"
 }
 
 destroy_stack() {
@@ -174,12 +201,14 @@ destroy_stack() {
 
   echo ""
   echo "======== DESTROY: $ENV/$stack ========"
+  echo "    localstack_endpoint=$LOCALSTACK_ENDPOINT"
   terraform -chdir="$dir" init -input=false
 
   if [[ "$stack" == "backend" || "$stack" == "eks" ]]; then
     parallelism=1
   fi
-  terraform -chdir="$dir" destroy -auto-approve -input=false -parallelism="$parallelism"
+  terraform -chdir="$dir" destroy -auto-approve -input=false -parallelism="$parallelism" \
+    -var="localstack_endpoint=${LOCALSTACK_ENDPOINT}"
 }
 
 # Local backend: dependent stacks read sibling terraform.tfstate via

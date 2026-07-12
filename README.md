@@ -5,8 +5,7 @@ Sample infrastructure on **LocalStack (free)** with Terraform, split into **shar
 **Kind** provides a real local Kubernetes control plane that **mirrors** LocalStack/AWS EKS Terraform (IAM roles, cluster/node-group naming, sample workloads). LocalStack community does **not** expose the EKS API (Pro-only), so `aws_eks_*` is not called — Kind + matching outputs stand in.
 
 **CI architecture (default)** — Kind is deferred until the `eks` stack so early
-stacks are not starved by Kind+LocalStack Docker contention on small runners
-([details](docs/FIX_CI_HANG_V2_S3_CONTENTION.md)):
+stacks are not starved by Kind+LocalStack Docker contention on small runners:
 
 ```
 Git Push
@@ -89,8 +88,6 @@ Workflow file: [`.github/workflows/terraform.yml`](.github/workflows/terraform.y
 |---|---|
 | [docs/STEP_BY_STEP.md](docs/STEP_BY_STEP.md) | Local & CI apply/destroy, optional TFC, troubleshooting |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Flowcharts, Kind↔EKS mirror, CI Kind-deferred sequencing |
-| [docs/FIX_CI_HANG_V2_S3_CONTENTION.md](docs/FIX_CI_HANG_V2_S3_CONTENTION.md) | Root cause: defer Kind until eks |
-| [docs/FIX_CI_TIMEOUT_HANG.md](docs/FIX_CI_TIMEOUT_HANG.md) | Containment: timeouts + diagnostics |
 
 ## Layout
 

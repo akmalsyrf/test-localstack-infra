@@ -31,7 +31,7 @@ data "aws_iam_policy_document" "ec2_assume" {
 resource "aws_iam_role" "cluster" {
   name               = "${var.prefix}-eks-cluster"
   assume_role_policy = data.aws_iam_policy_document.eks_assume.json
-  tags               = var.tags
+  # No tags: LocalStack IAM tag read-after-write waiters can hang indefinitely.
 }
 
 # LocalStack free often lacks AWS managed EKS policies; inline equivalents.
@@ -57,7 +57,7 @@ resource "aws_iam_role_policy" "cluster" {
 resource "aws_iam_role" "node" {
   name               = "${var.prefix}-eks-node"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
-  tags               = var.tags
+  # No tags: LocalStack IAM tag waiters can hang indefinitely.
 }
 
 resource "aws_iam_role_policy" "node" {
