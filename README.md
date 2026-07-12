@@ -95,11 +95,13 @@ Workflow files: [`.github/workflows/terraform.yml`](.github/workflows/terraform.
 ```
 localstack-infra/
 ├── .github/workflows/{terraform,drift-check}.yml
-├── docker-compose.yml
+├── docker-compose.yml                 # LocalStack (+ optional Portainer profile: debug)
+├── docker-compose.observability.yml   # Grafana/Loki/Promtail (opt-in; not in up.sh/CI)
+├── observability/                     # Grafana provisioning + Loki/Promtail configs
 ├── kind/cluster.yaml
 ├── docs/
 ├── lambda/api/
-├── scripts/          # up, kind-up/down, env, verify-apply, check-drift, use-*-backend, sync-live
+├── scripts/          # up, kind-*, env, verify-apply, check-drift, observability-*, portainer-*, …
 ├── tests/verify/     # verify-apply modules (sourced by scripts/verify-apply.sh)
 └── terraform/
     ├── modules/      # includes eks/
@@ -118,8 +120,11 @@ localstack-infra/
 - LocalStack endpoint: `http://localhost:4566` (dummy creds `test` / `test`)
 - Kind cluster: `testinfra-eks` (kubeconfig under `.kube/`, gitignored)
 - Default state backend is **local**; opt-in `BACKEND=s3` (LocalStack) or `BACKEND=cloud` (TFC)
-- Free-tier hardening: S3 SSE/versioning/lifecycle, SQS SSE+DLQ, EC2 IMDSv2+EBS encrypt, Secrets recovery window, S3 Gateway VPC endpoint, Lambda X-Ray/DLQ/concurrency, API GW access logs+throttle, CW alarms → SNS → **ops alerts SQS** (swap for email/Slack on real AWS), EKS sample HA, Kind↔LocalStack SQS/SNS bridge
+- Free-tier hardening: S3 SSE/versioning/lifecycle, SQS SSE+DLQ, EC2 IMDSv2+EBS encrypt, Secrets recovery window, S3 Gateway VPC endpoint, Lambda X-Ray/DLQ/concurrency, API GW access logs+throttle, CW dashboard+alarms → SNS → **ops alerts SQS**, EKS sample HA, Kind↔LocalStack SQS/SNS bridge
 - Drift: `./scripts/check-drift.sh <env>` (also used by `verify-apply.sh` and the scheduled drift-check workflow)
+- **Observability & debugging (opt-in, local-dev only — not started by `up.sh` or CI):**
+  - `./scripts/observability-up.sh` / `-down.sh` — Grafana OSS `:3000` + Loki + Promtail
+  - `./scripts/portainer-up.sh` / `-down.sh` — Portainer CE `:9000` (import `.kube/kind-config` for Kind)
 - Kind cluster: **2 workers** + metrics-server (`./scripts/kind-up.sh`). After changing `kind/cluster.yaml`, recreate with `./scripts/kind-down.sh && ./scripts/kind-up.sh`
 - **Still not included** on LocalStack free (Pro/paid or real AWS only): Amplify, CloudFront, WAF, RDS, ElastiCache, OpenSearch, ECS, real **NAT Gateway** routing, real **EKS API** / IRSA OIDC validation, Secrets auto-rotation, customer-managed KMS rotation. Kind mirrors EKS instead of calling `aws_eks_*`.
 - If using TFC: workspaces **must** use `execution_mode = "local"`

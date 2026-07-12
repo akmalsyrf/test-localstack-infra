@@ -45,6 +45,8 @@ require_out API_ID backend api_id
 require_out API_URL backend api_invoke_url
 require_out OPS_ALERTS_ARN backend ops_alerts_topic_arn
 require_out OPS_ALERTS_QUEUE_URL backend ops_alerts_queue_url
+require_out DASHBOARD_NAME backend dashboard_name
+require_out DASHBOARD_URL backend dashboard_url
 
 require_out EKS_CLUSTER_NAME eks cluster_name
 require_out EKS_CLUSTER_ARN eks cluster_arn

@@ -134,7 +134,30 @@ Hardening that stays within LocalStack Community coverage:
 | **State safety** | Opt-in `BACKEND=s3` (S3 + DynamoDB lock) via `terraform/s3-bootstrap` + `use-s3-backend.sh` |
 | **Security** | S3 SSE-AES256 + versioning + 30d noncurrent lifecycle; scoped IAM logs ARN; EC2 IMDSv2 + encrypted root; SQS SSE; Secrets recovery window 7d; CI tflint/checkov |
 | **Availability** | SQS DLQ + redrive; Lambda DLQ + reserved concurrency; EKS sample replicas=2 + resources + liveness; S3 Gateway VPC endpoint |
-| **Observability** | CW alarms (EC2 status, Lambda errors, SQS depth) → SNS ops topic → SQS alerts queue; Lambda/API X-Ray; API access logs; log retention 14d (30d production) |
+| **Observability** | CW dashboard + alarms (EC2 status, Lambda errors, SQS depth) → SNS ops topic → SQS alerts queue; Lambda/API X-Ray config; API access logs; log retention 14d (30d production). Optional local-only Grafana/Loki/Portainer — see below. |
+
+## Observability & debugging (optional, local-dev only)
+
+Three layers — only the first is always applied by Terraform / safe in CI:
+
+| Layer | What | When it runs |
+|---|---|---|
+| **1. CloudWatch Dashboard** | `aws_cloudwatch_dashboard` on the backend stack (EC2 / Lambda / SQS / API GW widgets). Zero runtime footprint. | Always (Terraform). Fine in CI. |
+| **2. Grafana + Loki + Promtail** | OSS log UI for Kind/Docker containers. | Opt-in: `./scripts/observability-up.sh` → `docker-compose.observability.yml`. **Never** started by `up.sh` or CI. |
+| **3. Portainer CE** | Docker + Kubernetes debug UI (`profiles: ["debug"]`). | Opt-in: `./scripts/portainer-up.sh`. **Never** started by `up.sh` or CI. |
+
+**Why excluded from CI:** small GitHub runners already contended between Kind and LocalStack ([CI sequencing](#ci-sequencing-kind-deferred)). Adding Grafana/Loki/Portainer would worsen that hang risk. Keep them laptop-only.
+
+```bash
+./scripts/observability-up.sh    # Grafana http://localhost:3000 (admin/admin)
+./scripts/observability-down.sh  # down -v
+./scripts/portainer-up.sh        # Portainer http://localhost:9000
+./scripts/portainer-down.sh      # stop only (keeps admin volume)
+```
+
+**Portainer + Kind:** Environments → Add → Kubernetes → Import kubeconfig → `.kube/kind-config`. Portainer sees all host Docker containers (including `testinfra-localstack` and Kind nodes) via the shared `docker.sock` — intentional.
+
+**X-Ray note:** Lambda/API set `tracing_config { mode = "Active" }` / `xray_tracing_enabled`, and `SERVICES` includes `xray`. On LocalStack Community **4.3**, `GetTraceSummaries` returns `InternalFailure` (“not yet implemented or pro feature”) — so **trace retrieval is not verifiable here**. `tests/verify/80_functional.sh` records that finding; treat X-Ray as configure-only until Community coverage changes (or you move to real AWS / Pro).
 
 ## Ops alerts: SNS → SQS (LocalStack-verifiable)
 
