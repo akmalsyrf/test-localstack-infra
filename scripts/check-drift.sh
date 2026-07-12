@@ -21,7 +21,8 @@ if [[ -z "$ENV" || ! -d "$ROOT/terraform/live/$ENV" ]]; then
 fi
 
 LIVE="$ROOT/terraform/live/$ENV"
-ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+LS_CONTAINER="${LOCALSTACK_CONTAINER:-testinfra-localstack}"
+KIND_DOCKER_NETWORK="${KIND_DOCKER_NETWORK:-kind}"
 STACKS=("$@")
 if [[ ${#STACKS[@]} -eq 0 ]]; then
   STACKS=(shared network backend eks)
@@ -31,6 +32,62 @@ export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-southeast-3}"
 export AWS_EC2_METADATA_DISABLED=true
+
+uses_s3_backend() {
+  grep -q 'backend "s3"' "$LIVE/shared/versions.tf" 2>/dev/null
+}
+
+# Mirror scripts/env.sh: prefer working localhost; fall back to container IP.
+resolve_endpoint() {
+  local preferred="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+  local ip="" endpoint=""
+
+  if curl -sf --max-time 3 "${preferred}/_localstack/health" >/dev/null 2>&1; then
+    echo "$preferred"
+    return 0
+  fi
+  if docker inspect "$LS_CONTAINER" >/dev/null 2>&1; then
+    ip="$(docker inspect -f '{{range $n,$c := .NetworkSettings.Networks}}{{if ne $n "kind"}}{{println $c.IPAddress}}{{end}}{{end}}' "$LS_CONTAINER" 2>/dev/null | awk 'NF{print; exit}')"
+    if [[ -z "$ip" ]]; then
+      ip="$(docker inspect -f "{{ (index .NetworkSettings.Networks \"${KIND_DOCKER_NETWORK}\").IPAddress }}" "$LS_CONTAINER" 2>/dev/null || true)"
+    fi
+    if [[ -n "$ip" && "$ip" != "<no value>" ]]; then
+      endpoint="http://${ip}:4566"
+      if curl -sf --max-time 3 "${endpoint}/_localstack/health" >/dev/null 2>&1; then
+        echo "$endpoint"
+        return 0
+      fi
+    fi
+  fi
+  echo "LocalStack unreachable (tried $preferred and container IP)." >&2
+  return 1
+}
+
+sync_s3_backend_endpoints() {
+  local endpoint="$1"
+  local stack vf
+  for stack in shared network backend eks; do
+    vf="$LIVE/$stack/versions.tf"
+    [[ -f "$vf" ]] || continue
+    grep -q 'backend "s3"' "$vf" 2>/dev/null || continue
+    python3 - "$vf" "$endpoint" <<'PY'
+import pathlib, re, sys
+path, ep = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = path.read_text()
+text2, _ = re.subn(r'(?m)^(\s*endpoint\s*=\s*)"[^"]*"', rf'\1"{ep}"', text, count=1)
+text3, _ = re.subn(r'(?m)^(\s*dynamodb_endpoint\s*=\s*)"[^"]*"', rf'\1"{ep}"', text2, count=1)
+path.write_text(text3)
+PY
+  done
+}
+
+ENDPOINT="$(resolve_endpoint)"
+export LOCALSTACK_ENDPOINT="$ENDPOINT"
+export TF_VAR_localstack_endpoint="$ENDPOINT"
+
+if uses_s3_backend; then
+  sync_s3_backend_endpoints "$ENDPOINT"
+fi
 
 PASS=0
 FAIL=0
@@ -55,6 +112,9 @@ check_drift() {
     fail "stack dir missing: $dir"
     return 0
   fi
+
+  # Match env.sh: backend may flip local↔s3 or S3 endpoints may be rewritten.
+  terraform -chdir="$dir" init -input=false -reconfigure -force-copy >/dev/null
 
   for attempt in 1 2 3; do
     set +e

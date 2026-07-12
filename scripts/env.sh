@@ -60,6 +60,40 @@ includes_stack() {
   return 1
 }
 
+# When host :4566 is broken, provider vars alone are not enough for BACKEND=s3:
+# terraform backend "s3" { endpoint / dynamodb_endpoint } are baked by sync-live
+# and used at init/refresh — rewrite them to the working endpoint.
+sync_s3_backend_endpoints() {
+  local endpoint="$1"
+  local stack vf
+  [[ -d "$LIVE" ]] || return 0
+  for stack in "${ALL_STACKS[@]}"; do
+    vf="$LIVE/$stack/versions.tf"
+    [[ -f "$vf" ]] || continue
+    grep -q 'backend "s3"' "$vf" 2>/dev/null || continue
+    python3 - "$vf" "$endpoint" <<'PY'
+import pathlib, re, sys
+path, ep = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = path.read_text()
+# Only the backend block uses bare endpoint / dynamodb_endpoint keys.
+text2, n1 = re.subn(
+    r'(?m)^(\s*endpoint\s*=\s*)"[^"]*"',
+    rf'\1"{ep}"',
+    text,
+    count=1,
+)
+text3, n2 = re.subn(
+    r'(?m)^(\s*dynamodb_endpoint\s*=\s*)"[^"]*"',
+    rf'\1"{ep}"',
+    text2,
+    count=1,
+)
+if n1 or n2:
+    path.write_text(text3)
+PY
+  done
+}
+
 # On Linux CI, attaching LocalStack to the Kind network often breaks host :4566
 # publish. Prefer localhost when it works; otherwise talk to the container IP
 # on a non-kind Docker network (reachable from the GitHub runner host).
@@ -117,6 +151,10 @@ PY
       fi
     done
   fi
+  # BACKEND=s3: backend block endpoints must match (provider -var alone is not enough).
+  if uses_s3_backend; then
+    sync_s3_backend_endpoints "$endpoint"
+  fi
   # Persist for later CI steps (verify-apply, latency checks).
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     {
@@ -139,6 +177,16 @@ prepare_kind_localstack_bridge() {
   echo "==> Ensuring $LS_CONTAINER on Docker network '$KIND_DOCKER_NETWORK' (before eks)..."
   docker network connect "$KIND_DOCKER_NETWORK" "$LS_CONTAINER" 2>/dev/null || true
   ensure_localstack_endpoint
+  # Re-bake S3 templates with the working endpoint. The terraform backend "s3"
+  # block cannot use variables; sync-live injects LOCALSTACK_ENDPOINT into
+  # versions.tf. terraform_remote_state uses var.localstack_endpoint (see
+  # main.s3.tf) so -var/tfvars also cover sibling state reads after Kind attach.
+  if uses_s3_backend; then
+    echo "==> Re-syncing S3 live stacks with endpoint $LOCALSTACK_ENDPOINT..."
+    BACKEND=s3 LOCALSTACK_ENDPOINT="$LOCALSTACK_ENDPOINT" \
+      APP_NAME="${APP_NAME:-testinfra}" \
+      "$ROOT/scripts/sync-live.sh"
+  fi
 }
 
 uses_tfc_cloud() {
@@ -151,9 +199,18 @@ uses_s3_backend() {
 
 stack_has_state() {
   local stack="$1"
-  if uses_s3_backend || uses_tfc_cloud; then
-    # Remote backends: probe via outputs after init (no local terraform.tfstate).
-    terraform -chdir="$LIVE/$stack" init -input=false >/dev/null 2>&1 || return 1
+  if uses_s3_backend; then
+    # Prefer an object probe — terraform output after a bare init can false-positive
+    # or fail for unrelated reasons on empty remote state.
+    local bucket="tfstate-testinfra-${ENV}"
+    local key="${stack}/terraform.tfstate"
+    aws --endpoint-url="${LOCALSTACK_ENDPOINT:-http://localhost:4566}" \
+      --region "${AWS_DEFAULT_REGION:-ap-southeast-3}" \
+      s3api head-object --bucket "$bucket" --key "$key" >/dev/null 2>&1
+    return $?
+  fi
+  if uses_tfc_cloud; then
+    tf_init "$LIVE/$stack" >/dev/null 2>&1 || return 1
     terraform -chdir="$LIVE/$stack" output -json >/dev/null 2>&1
     return $?
   fi
@@ -161,6 +218,14 @@ stack_has_state() {
   [[ -f "$state" ]] || return 1
   # Empty / never-applied local state still "exists" as a file sometimes; require outputs.
   terraform -chdir="$LIVE/$stack" output -json >/dev/null 2>&1
+}
+
+tf_init() {
+  local dir="$1"
+  # -reconfigure: sync-live may flip backend (local↔s3) or rewrite S3 endpoints
+  # after Kind attach breaks localhost. -force-copy: auto-answer migration prompts
+  # (required with -input=false when a leftover local backend/.terraform exists).
+  terraform -chdir="$dir" init -input=false -reconfigure -force-copy
 }
 
 apply_stack() {
@@ -171,7 +236,7 @@ apply_stack() {
   echo ""
   echo "======== APPLY: $ENV/$stack ========"
   echo "    localstack_endpoint=$LOCALSTACK_ENDPOINT"
-  terraform -chdir="$dir" init -input=false
+  tf_init "$dir"
 
   # LocalStack + Kind on small CI runners: serialize chatty stacks.
   if [[ "$stack" == "backend" || "$stack" == "eks" ]]; then
@@ -189,7 +254,7 @@ plan_stack() {
   echo ""
   echo "======== PLAN: $ENV/$stack ========"
   echo "    localstack_endpoint=$LOCALSTACK_ENDPOINT"
-  terraform -chdir="$dir" init -input=false
+  tf_init "$dir"
   terraform -chdir="$dir" plan -input=false \
     -var="localstack_endpoint=${LOCALSTACK_ENDPOINT}"
 }
@@ -202,7 +267,7 @@ destroy_stack() {
   echo ""
   echo "======== DESTROY: $ENV/$stack ========"
   echo "    localstack_endpoint=$LOCALSTACK_ENDPOINT"
-  terraform -chdir="$dir" init -input=false
+  tf_init "$dir"
 
   if [[ "$stack" == "backend" || "$stack" == "eks" ]]; then
     parallelism=1
@@ -211,24 +276,26 @@ destroy_stack() {
     -var="localstack_endpoint=${LOCALSTACK_ENDPOINT}"
 }
 
-# Local backend: dependent stacks read sibling terraform.tfstate via
-# terraform_remote_state. Ephemeral CI (and fresh checkouts) have no state until
-# apply — so plan must apply upstream stacks first.
-ensure_upstream_state_for_plan() {
+# Dependent stacks read sibling state via terraform_remote_state. Ephemeral CI
+# (and fresh S3 buckets) have no state until apply — so plan/apply of backend/eks
+# must materialize upstream stacks first.
+ensure_upstream_state() {
   local stack="$1"
   case "$stack" in
     backend)
       for dep in shared network; do
         if ! stack_has_state "$dep"; then
-          echo "==> plan needs $dep state (terraform_remote_state); applying $dep first..."
+          echo "==> $ACTION needs $dep state (terraform_remote_state); applying $dep first..."
           apply_stack "$dep"
+        else
+          echo "==> upstream $dep state present"
         fi
       done
       ;;
     eks)
       for dep in network backend; do
         if ! stack_has_state "$dep"; then
-          echo "==> plan needs $dep state (terraform_remote_state); applying $dep first..."
+          echo "==> $ACTION needs $dep state (terraform_remote_state); applying $dep first..."
           if [[ "$dep" == "backend" ]]; then
             for upstream in shared network; do
               if ! stack_has_state "$upstream"; then
@@ -237,6 +304,8 @@ ensure_upstream_state_for_plan() {
             done
           fi
           apply_stack "$dep"
+        else
+          echo "==> upstream $dep state present"
         fi
       done
       ;;
@@ -279,6 +348,7 @@ fi
 case "$ACTION" in
   apply)
     for stack in "${STACKS[@]}"; do
+      ensure_upstream_state "$stack"
       apply_stack "$stack"
     done
     if includes_stack backend; then
@@ -305,7 +375,7 @@ case "$ACTION" in
     ;;
   plan)
     for stack in "${STACKS[@]}"; do
-      ensure_upstream_state_for_plan "$stack"
+      ensure_upstream_state "$stack"
       plan_stack "$stack"
     done
     ;;

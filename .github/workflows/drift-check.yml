@@ -4,10 +4,11 @@ name: Drift check (scheduled)
 #
 # Limitation (documented in docs/ARCHITECTURE.md): CI runners and LocalStack are
 # ephemeral — there is no multi-day infra to compare between jobs. This workflow:
-#   1) brings up LocalStack (+ Kind for eks)
-#   2) bootstraps BACKEND=s3 (persists state in LocalStack for the job duration)
-#   3) applies shared → network → backend → eks
-#   4) runs scripts/check-drift.sh
+#   1) LocalStack alone (Kind deferred — same sequencing as terraform.yml)
+#   2) bootstrap BACKEND=s3 + apply shared/network/backend while host :4566 works
+#   3) Kind, then apply eks (env.sh rewrites S3 backend endpoints if Kind attach
+#      breaks localhost publish on Linux)
+#   4) scripts/check-drift.sh
 # It cannot detect real out-of-band changes against a long-lived LocalStack —
 # that would need a persistent LocalStack instance or real AWS.
 # Notifications: rely on GitHub workflow-failure emails to repo watchers.
@@ -67,22 +68,68 @@ jobs:
         run: |
           echo "environment=${{ github.event.inputs.environment || 'staging' }}" >> "$GITHUB_OUTPUT"
 
-      - name: Start LocalStack + Kind
+      - name: Start LocalStack (no Kind yet)
+        timeout-minutes: 5
         run: |
           chmod +x scripts/*.sh
-          ./scripts/up.sh
+          # Match terraform.yml: keep host :4566 healthy for S3 backend bootstrap
+          # and early stacks. Kind attach on Linux CI breaks published :4566.
+          SKIP_KIND=1 ./scripts/up.sh
           curl -sf http://localhost:4566/_localstack/health
 
-      - name: Bootstrap S3 backend + apply + drift check
+      - name: Bootstrap S3 backend
         run: |
           chmod +x scripts/*.sh
-          ENV="${{ steps.meta.outputs.environment }}"
-          ./scripts/use-s3-backend.sh "$ENV"
-          ./scripts/env.sh "$ENV" apply
-          ./scripts/check-drift.sh "$ENV"
+          ./scripts/use-s3-backend.sh "${{ steps.meta.outputs.environment }}"
+
+      - name: Apply shared, network, backend
+        timeout-minutes: 25
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" apply shared,network,backend
+
+      - name: Start Kind (before eks only)
+        timeout-minutes: 15
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/kind-up.sh
+          # Do NOT docker-network-connect LocalStack here (breaks host :4566).
+          # env.sh / localstack-network-info.sh handle attach before eks apply.
+          if ! curl -sf --max-time 3 http://localhost:4566/_localstack/health >/dev/null; then
+            echo "LocalStack unreachable after Kind create — docker compose up -d (no recreate)..."
+            docker compose up -d --no-recreate
+          fi
+          for i in $(seq 1 60); do
+            if curl -sf --max-time 3 http://localhost:4566/_localstack/health >/dev/null; then
+              echo "LocalStack healthy (host :4566)."
+              break
+            fi
+            if [[ "$i" -eq 60 ]]; then
+              echo "::error::LocalStack did not recover after Kind start"
+              docker compose ps || true
+              docker compose logs --tail=80 || true
+              exit 1
+            fi
+            sleep 2
+          done
+          kind get clusters
+          kubectl --kubeconfig .kube/kind-config get nodes
+
+      - name: Apply eks
+        timeout-minutes: 25
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" apply eks
+
+      - name: Drift check
+        timeout-minutes: 15
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/check-drift.sh "${{ steps.meta.outputs.environment }}"
 
       - name: Stop Kind + LocalStack
         if: always()
+        timeout-minutes: 5
         run: |
           docker compose down -v || true
           ./scripts/kind-down.sh || true

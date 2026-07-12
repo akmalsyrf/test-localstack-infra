@@ -2,10 +2,15 @@ name: Terraform LocalStack
 
 # CI sequencing (avoids Kind+LocalStack Docker/CPU contention on small runners):
 #   1) LocalStack alone + latency smoke
-#   2) Terraform shared → network → backend  (no Kind)
-#   3) Kind (+ metrics-server) + latency smoke again
-#   4) Terraform eks + verify-apply
+#   2) Configure backend (local | s3 | cloud) — s3 bootstraps on LocalStack
+#   3) Terraform shared → network → backend  (no Kind)
+#   4) Kind (+ metrics-server) + latency smoke again
+#   5) Terraform eks + verify-apply
 # Local `./scripts/up.sh` still starts Kind then LocalStack for one-command DX.
+#
+# Backend selection:
+#   - workflow_dispatch: choose via "backend" input (default s3)
+#   - push / pull_request: BACKEND=s3 (same default; override by editing env.BACKEND)
 
 on:
   pull_request:
@@ -32,9 +37,18 @@ on:
           - apply
           - destroy
         default: plan
+      backend:
+        description: Backend type
+        required: true
+        type: choice
+        options:
+          - local
+          - s3
+          - cloud
+        default: s3
 
 concurrency:
-  group: terraform-localstack-${{ github.event.inputs.environment || 'staging' }}-${{ github.ref }}
+  group: terraform-localstack-${{ github.event.inputs.environment || 'staging' }}-${{ github.event.inputs.backend || 's3' }}-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -44,7 +58,8 @@ env:
   AWS_DEFAULT_REGION: ap-southeast-3
   AWS_EC2_METADATA_DISABLED: "true"
   TFC_ORG: ExperimentTerraform
-  BACKEND: local
+  # workflow_dispatch uses the input; push/PR fall back to s3
+  BACKEND: ${{ github.event.inputs.backend || 's3' }}
   # Lambda invoke smoke tests need the docker executor; Kind is deferred (below)
   # so both are not contending during shared/network/backend.
   LAMBDA_RUNTIME_EXECUTOR: docker
@@ -67,9 +82,10 @@ jobs:
           terraform_version: "1.5.7"
           terraform_wrapper: false
 
-      - name: Sync live stacks (local backend)
+      - name: Sync live stacks (local backend for lint)
         run: |
           chmod +x scripts/*.sh
+          # Lint against generated local-backend roots; apply job configures the real backend.
           BACKEND=local ./scripts/sync-live.sh
 
       - name: Setup TFLint
@@ -107,7 +123,7 @@ jobs:
           skip_check: CKV_AWS_144,CKV_AWS_18,CKV_AWS_21,CKV2_AWS_6,CKV_AWS_145,CKV_AWS_19,CKV_AWS_26,CKV_AWS_27,CKV_AWS_7
 
   terraform:
-    name: Terraform (${{ github.event.inputs.environment || 'staging' }})
+    name: Terraform (${{ github.event.inputs.environment || 'staging' }} / ${{ github.event.inputs.backend || 's3' }})
     needs: static-analysis
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -117,13 +133,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Require TFC token when BACKEND=cloud
-        run: |
-          if [ "${BACKEND}" = "cloud" ] && [ -z "${TF_TOKEN_app_terraform_io}" ]; then
-            echo "::error::BACKEND=cloud requires repository secret TF_TOKEN_app_terraform_io."
-            exit 1
-          fi
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
@@ -136,18 +145,34 @@ jobs:
           terraform_version: "1.5.7"
           terraform_wrapper: false
 
-      - name: Resolve environment & action
+      - name: Resolve environment, action & backend
         id: meta
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "environment=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
             echo "action=${{ github.event.inputs.action }}" >> "$GITHUB_OUTPUT"
+            echo "backend=${{ github.event.inputs.backend }}" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "environment=staging" >> "$GITHUB_OUTPUT"
             echo "action=plan" >> "$GITHUB_OUTPUT"
+            echo "backend=${BACKEND}" >> "$GITHUB_OUTPUT"
           else
             echo "environment=staging" >> "$GITHUB_OUTPUT"
             echo "action=apply" >> "$GITHUB_OUTPUT"
+            echo "backend=${BACKEND}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Persist BACKEND for later steps
+        run: |
+          echo "BACKEND=${{ steps.meta.outputs.backend }}" >> "$GITHUB_ENV"
+          echo "Resolved BACKEND=${{ steps.meta.outputs.backend }} action=${{ steps.meta.outputs.action }} env=${{ steps.meta.outputs.environment }}"
+
+      - name: Require TFC token when BACKEND=cloud
+        if: steps.meta.outputs.backend == 'cloud'
+        run: |
+          if [ -z "${TF_TOKEN_app_terraform_io}" ]; then
+            echo "::error::BACKEND=cloud requires repository secret TF_TOKEN_app_terraform_io."
+            exit 1
           fi
 
       - name: Start LocalStack (no Kind yet)
@@ -160,16 +185,46 @@ jobs:
           echo
           echo "LocalStack is healthy (Kind deferred until eks stage)."
 
+      - name: Configure Terraform backend
+        timeout-minutes: 5
+        run: |
+          chmod +x scripts/*.sh
+          ENV="${{ steps.meta.outputs.environment }}"
+          case "${{ steps.meta.outputs.backend }}" in
+            s3)
+              ./scripts/use-s3-backend.sh "$ENV"
+              ;;
+            cloud)
+              ./scripts/use-tfc-backend.sh
+              ;;
+            local)
+              ./scripts/use-local-backend.sh
+              ;;
+            *)
+              echo "::error::Unknown backend '${{ steps.meta.outputs.backend }}' (expected local|s3|cloud)"
+              exit 1
+              ;;
+          esac
+
       - name: LocalStack latency smoke (pre-Kind)
         timeout-minutes: 2
         run: ./scripts/check-localstack-latency.sh 5
 
       - name: Terraform ${{ steps.meta.outputs.action }} (shared,network,backend)
         if: steps.meta.outputs.action != 'destroy'
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: |
           chmod +x scripts/*.sh
-          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" "${{ steps.meta.outputs.action }}" shared,network,backend
+          ENV="${{ steps.meta.outputs.environment }}"
+          ACTION="${{ steps.meta.outputs.action }}"
+          # backend's terraform_remote_state needs shared+network state in the
+          # configured backend. On plan (and fresh S3), apply upstream first;
+          # env.sh also enforces this, but keep it explicit for CI clarity.
+          ./scripts/env.sh "$ENV" apply shared,network
+          ./scripts/env.sh "$ENV" "$ACTION" backend
+          if [ "$ACTION" = "plan" ]; then
+            ./scripts/env.sh "$ENV" plan shared,network
+          fi
 
       - name: Start Kind (before eks only)
         timeout-minutes: 15
@@ -230,6 +285,7 @@ jobs:
         if: failure()
         timeout-minutes: 5
         run: |
+          echo "==> BACKEND=${BACKEND:-unset} LOCALSTACK_ENDPOINT=${LOCALSTACK_ENDPOINT:-unset}"
           echo "==> LocalStack health (localhost)"
           curl -sf --max-time 3 http://localhost:4566/_localstack/health || echo "(localhost failed)"
           echo
@@ -239,7 +295,6 @@ jobs:
             curl -sf --max-time 3 "http://${LS_IP}:4566/_localstack/health" || echo "(container IP failed)"
           fi
           echo
-          echo "==> LOCALSTACK_ENDPOINT=${LOCALSTACK_ENDPOINT:-unset}"
           echo "==> Docker stats (top)"
           docker stats --no-stream || true
           echo "==> LocalStack logs (tail)"

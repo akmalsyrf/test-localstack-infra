@@ -1,5 +1,7 @@
 # Backend stack — S3 remote state (reads sibling stack state from LocalStack S3).
-# Placeholders __TFSTATE_BUCKET__ / __AWS_REGION__ / __LOCALSTACK_ENDPOINT__ injected by sync-live.sh
+# Placeholders __TFSTATE_BUCKET__ / __AWS_REGION__ injected by sync-live.sh.
+# Remote-state endpoint uses var.localstack_endpoint (not a baked URL) so Kind
+# attach breaking host :4566 on Linux CI can be fixed via -var / tfvars.
 
 data "terraform_remote_state" "network" {
   backend = "s3"
@@ -7,7 +9,7 @@ data "terraform_remote_state" "network" {
     bucket                      = "__TFSTATE_BUCKET__"
     key                         = "network/terraform.tfstate"
     region                      = "__AWS_REGION__"
-    endpoint                    = "__LOCALSTACK_ENDPOINT__"
+    endpoint                    = var.localstack_endpoint
     access_key                  = "test"
     secret_key                  = "test"
     skip_credentials_validation = true
@@ -22,7 +24,7 @@ data "terraform_remote_state" "shared" {
     bucket                      = "__TFSTATE_BUCKET__"
     key                         = "shared/terraform.tfstate"
     region                      = "__AWS_REGION__"
-    endpoint                    = "__LOCALSTACK_ENDPOINT__"
+    endpoint                    = var.localstack_endpoint
     access_key                  = "test"
     secret_key                  = "test"
     skip_credentials_validation = true
