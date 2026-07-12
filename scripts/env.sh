@@ -60,6 +60,40 @@ includes_stack() {
   return 1
 }
 
+# When host :4566 is broken, provider vars alone are not enough for BACKEND=s3:
+# terraform backend "s3" { endpoint / dynamodb_endpoint } are baked by sync-live
+# and used at init/refresh — rewrite them to the working endpoint.
+sync_s3_backend_endpoints() {
+  local endpoint="$1"
+  local stack vf
+  [[ -d "$LIVE" ]] || return 0
+  for stack in "${ALL_STACKS[@]}"; do
+    vf="$LIVE/$stack/versions.tf"
+    [[ -f "$vf" ]] || continue
+    grep -q 'backend "s3"' "$vf" 2>/dev/null || continue
+    python3 - "$vf" "$endpoint" <<'PY'
+import pathlib, re, sys
+path, ep = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = path.read_text()
+# Only the backend block uses bare endpoint / dynamodb_endpoint keys.
+text2, n1 = re.subn(
+    r'(?m)^(\s*endpoint\s*=\s*)"[^"]*"',
+    rf'\1"{ep}"',
+    text,
+    count=1,
+)
+text3, n2 = re.subn(
+    r'(?m)^(\s*dynamodb_endpoint\s*=\s*)"[^"]*"',
+    rf'\1"{ep}"',
+    text2,
+    count=1,
+)
+if n1 or n2:
+    path.write_text(text3)
+PY
+  done
+}
+
 # On Linux CI, attaching LocalStack to the Kind network often breaks host :4566
 # publish. Prefer localhost when it works; otherwise talk to the container IP
 # on a non-kind Docker network (reachable from the GitHub runner host).
@@ -117,6 +151,10 @@ PY
       fi
     done
   fi
+  # BACKEND=s3: backend block endpoints must match (provider -var alone is not enough).
+  if uses_s3_backend; then
+    sync_s3_backend_endpoints "$endpoint"
+  fi
   # Persist for later CI steps (verify-apply, latency checks).
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     {
@@ -163,6 +201,14 @@ stack_has_state() {
   terraform -chdir="$LIVE/$stack" output -json >/dev/null 2>&1
 }
 
+tf_init() {
+  local dir="$1"
+  # -reconfigure: sync-live may flip backend (local↔s3) or rewrite S3 endpoints
+  # after Kind attach breaks localhost. -force-copy: auto-answer migration prompts
+  # (required with -input=false when a leftover local backend/.terraform exists).
+  terraform -chdir="$dir" init -input=false -reconfigure -force-copy
+}
+
 apply_stack() {
   local stack="$1"
   local dir="$LIVE/$stack"
@@ -171,7 +217,7 @@ apply_stack() {
   echo ""
   echo "======== APPLY: $ENV/$stack ========"
   echo "    localstack_endpoint=$LOCALSTACK_ENDPOINT"
-  terraform -chdir="$dir" init -input=false
+  tf_init "$dir"
 
   # LocalStack + Kind on small CI runners: serialize chatty stacks.
   if [[ "$stack" == "backend" || "$stack" == "eks" ]]; then
@@ -189,7 +235,7 @@ plan_stack() {
   echo ""
   echo "======== PLAN: $ENV/$stack ========"
   echo "    localstack_endpoint=$LOCALSTACK_ENDPOINT"
-  terraform -chdir="$dir" init -input=false
+  tf_init "$dir"
   terraform -chdir="$dir" plan -input=false \
     -var="localstack_endpoint=${LOCALSTACK_ENDPOINT}"
 }
@@ -202,7 +248,7 @@ destroy_stack() {
   echo ""
   echo "======== DESTROY: $ENV/$stack ========"
   echo "    localstack_endpoint=$LOCALSTACK_ENDPOINT"
-  terraform -chdir="$dir" init -input=false
+  tf_init "$dir"
 
   if [[ "$stack" == "backend" || "$stack" == "eks" ]]; then
     parallelism=1

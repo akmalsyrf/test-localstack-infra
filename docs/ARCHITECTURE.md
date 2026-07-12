@@ -153,6 +153,8 @@ Email / Slack / PagerDuty cannot be verified end-to-end on free LocalStack (no r
 Workflow: [`.github/workflows/drift-check.yml`](../.github/workflows/drift-check.yml) (`cron` daily + `workflow_dispatch`). Shared logic: [`scripts/check-drift.sh`](../scripts/check-drift.sh) (also called from `verify-apply.sh`).
 
 **Limitation:** GitHub runners and LocalStack here are ephemeral. There is no multi-day persisted infra to compare against between jobs. The scheduled job re-applies fresh, then asserts `terraform plan` is empty — the same 0-drift-after-apply safety net as per-run verify, on a cadence. True out-of-band drift detection needs a persistent LocalStack (or real AWS) with durable state; neither is free on ephemeral CI. Failures notify via GitHub’s built-in workflow-failure emails.
+
+**CI sequencing (same as `terraform.yml`):** LocalStack alone → S3 bootstrap → apply `shared/network/backend` while host `:4566` works → Kind → apply `eks`. On Linux, attaching LocalStack to the Kind network can break published `:4566`; `scripts/env.sh` then switches the provider **and** the S3 backend `endpoint`/`dynamodb_endpoint` to the container IP (`init -reconfigure`). Default `terraform.yml` stays on `BACKEND=local` and is unaffected.
 | **Scalability** | API GW usage plan + stage throttling; Kind metrics-server + HPA (min 2 / max 4) |
 
 ### Still NOT production-ready (out of scope / Pro or paid)
