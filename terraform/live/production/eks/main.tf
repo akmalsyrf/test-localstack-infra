@@ -1,16 +1,34 @@
-# EKS stack — local state only (reads sibling network + backend terraform.tfstate).
+# EKS stack — S3 remote state (reads network + backend from LocalStack S3).
 
 data "terraform_remote_state" "network" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "${path.module}/../network/terraform.tfstate"
+    bucket                      = "tfstate-testinfra-production"
+    key                         = "network/terraform.tfstate"
+    region                      = "ap-southeast-3"
+    # var — not a baked URL: host :4566 can break after Kind attach on Linux CI;
+    # scripts/env.sh passes the working endpoint via -var / terraform.tfvars.
+    endpoint                    = var.localstack_endpoint
+    access_key                  = "test"
+    secret_key                  = "test"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    force_path_style            = true
   }
 }
 
 data "terraform_remote_state" "backend" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "${path.module}/../backend/terraform.tfstate"
+    bucket                      = "tfstate-testinfra-production"
+    key                         = "backend/terraform.tfstate"
+    region                      = "ap-southeast-3"
+    endpoint                    = var.localstack_endpoint
+    access_key                  = "test"
+    secret_key                  = "test"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    force_path_style            = true
   }
 }
 
@@ -42,9 +60,8 @@ module "eks" {
   sqs_fifo_queue_url     = local.backend.fifo_queue_url
   sqs_standard_queue_arn = local.backend.standard_queue_arn
   sqs_fifo_queue_arn     = local.backend.fifo_queue_arn
-  # IRSA OIDC is a no-op on LocalStack Community (no real EKS API). Keep false.
-  enable_irsa_oidc = false
-  tags             = local.tags
+  enable_irsa_oidc       = false
+  tags                   = local.tags
 }
 
 output "cluster_name" {

@@ -1,5 +1,5 @@
-# Optional local-only backend (no Terraform Cloud).
-# Use: BACKEND=local ./scripts/sync-live.sh
+# S3 + DynamoDB remote state on LocalStack (BACKEND=s3).
+# Placeholders injected by scripts/sync-live.sh
 
 terraform {
   required_version = ">= 1.5.0"
@@ -11,7 +11,19 @@ terraform {
     }
   }
 
-  backend "local" {}
+  backend "s3" {
+    bucket                      = "tfstate-testinfra-production"
+    key                         = "shared/terraform.tfstate"
+    region                      = "ap-southeast-3"
+    dynamodb_table              = "tflock-testinfra-production"
+    endpoint                    = "http://localhost:4566"
+    dynamodb_endpoint           = "http://localhost:4566"
+    access_key                  = "test"
+    secret_key                  = "test"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    force_path_style            = true
+  }
 }
 
 provider "aws" {

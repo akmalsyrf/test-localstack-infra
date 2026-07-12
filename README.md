@@ -100,6 +100,7 @@ localstack-infra/
 ├── docs/
 ├── lambda/api/
 ├── scripts/          # up, kind-up/down, env, verify-apply, check-drift, use-*-backend, sync-live
+├── tests/verify/     # verify-apply modules (sourced by scripts/verify-apply.sh)
 └── terraform/
     ├── modules/      # includes eks/
     ├── tfc-bootstrap/

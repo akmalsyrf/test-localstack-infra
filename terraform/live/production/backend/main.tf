@@ -1,22 +1,35 @@
-# Backend stack — local state only (reads sibling terraform.tfstate files).
-# No tfe provider / tfe_outputs (those are in main.tf for BACKEND=cloud).
-#
-# ASG+launch_template self-healing: LocalStack Community implements Auto Scaling
-# APIs, but ALB target-group health-check simulation is incomplete and swapping
-# the single aws_instance for ASG would break existing instance_id verify paths.
-# Kept as a single EC2 instance with IMDSv2 + encrypted root volume instead.
+# Backend stack — S3 remote state (reads sibling stack state from LocalStack S3).
+# Placeholders tfstate-testinfra-production / ap-southeast-3 injected by sync-live.sh.
+# Remote-state endpoint uses var.localstack_endpoint (not a baked URL) so Kind
+# attach breaking host :4566 on Linux CI can be fixed via -var / tfvars.
 
 data "terraform_remote_state" "network" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "${path.module}/../network/terraform.tfstate"
+    bucket                      = "tfstate-testinfra-production"
+    key                         = "network/terraform.tfstate"
+    region                      = "ap-southeast-3"
+    endpoint                    = var.localstack_endpoint
+    access_key                  = "test"
+    secret_key                  = "test"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    force_path_style            = true
   }
 }
 
 data "terraform_remote_state" "shared" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = "${path.module}/../shared/terraform.tfstate"
+    bucket                      = "tfstate-testinfra-production"
+    key                         = "shared/terraform.tfstate"
+    region                      = "ap-southeast-3"
+    endpoint                    = var.localstack_endpoint
+    access_key                  = "test"
+    secret_key                  = "test"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    force_path_style            = true
   }
 }
 
