@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Category: checks
 # Standalone Terraform drift check against LocalStack (or any configured backend).
 # Usage: check-drift.sh <dev|staging|production> [stack1 stack2 ...]
 #
@@ -8,10 +9,10 @@
 #   2 — at least one stack reported drift or plan failure
 #
 # Retries each stack up to 3 times to absorb transient LocalStack attribute reorder.
-# Used by: scripts/verify-apply.sh and .github/workflows/drift-check.yml
+# Used by: scripts/checks/verify-apply.sh and .github/workflows/drift-check.yml
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ENV="${1:-}"
 shift || true
 
@@ -37,7 +38,7 @@ uses_s3_backend() {
   grep -q 'backend "s3"' "$LIVE/shared/versions.tf" 2>/dev/null
 }
 
-# Mirror scripts/env.sh: prefer working localhost; fall back to container IP.
+# Mirror scripts/lifecycle/env.sh: prefer working localhost; fall back to container IP.
 resolve_endpoint() {
   local preferred="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
   local ip="" endpoint=""

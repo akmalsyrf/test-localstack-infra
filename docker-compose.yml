@@ -33,7 +33,7 @@ services:
       retries: 30
       start_period: 10s
 
-  # Optional local-dev only (Compose profile). Not started by scripts/up.sh or CI.
+  # Optional local-dev only (Compose profile). Not started by scripts/lifecycle/up.sh or CI.
   # Manage Docker (LocalStack + Kind nodes) and import Kind kubeconfig for K8s.
   portainer:
     profiles: ["debug"]

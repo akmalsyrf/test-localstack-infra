@@ -7,7 +7,7 @@ data "terraform_remote_state" "network" {
     key                         = "network/terraform.tfstate"
     region                      = "__AWS_REGION__"
     # var — not a baked URL: host :4566 can break after Kind attach on Linux CI;
-    # scripts/env.sh passes the working endpoint via -var / terraform.tfvars.
+    # scripts/lifecycle/env.sh passes the working endpoint via -var / terraform.tfvars.
     endpoint                    = var.localstack_endpoint
     access_key                  = "test"
     secret_key                  = "test"

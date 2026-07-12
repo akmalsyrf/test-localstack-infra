@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
+# Category: kind
 # Delete the Kind cluster used as LocalStack EKS backend.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-testinfra-eks}"
 KUBE_DIR="${KIND_KUBE_DIR:-$ROOT/.kube}"
 

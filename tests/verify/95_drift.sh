@@ -2,7 +2,7 @@ section "Terraform drift (plan -detailed-exitcode)"
 
 DRIFT_OUT="/tmp/verify-drift-${ENV}.txt"
 set +e
-"$ROOT/scripts/check-drift.sh" "$ENV" | tee "$DRIFT_OUT"
+"$ROOT/scripts/checks/check-drift.sh" "$ENV" | tee "$DRIFT_OUT"
 DRIFT_RC=${PIPESTATUS[0]}
 set -e
 # Merge PASS/FAIL lines into this run's counters (check-drift prints the same format).

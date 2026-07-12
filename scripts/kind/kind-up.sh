@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# Category: kind
 # Create Kind cluster that backs LocalStack EKS (EKS_K8S_PROVIDER=local).
 # Also writes a LocalStack-friendly kubeconfig (host.docker.internal).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-testinfra-eks}"
 KIND_CONFIG="${KIND_CONFIG:-$ROOT/kind/cluster.yaml}"
 KUBE_DIR="${KIND_KUBE_DIR:-$ROOT/.kube}"
@@ -93,7 +94,7 @@ WORKER_COUNT="$(kubectl --kubeconfig "$HOST_KUBECONFIG" get nodes -l '!node-role
 EXPECTED_WORKERS=2
 if [[ "$WORKER_COUNT" -lt "$EXPECTED_WORKERS" ]]; then
   echo "WARNING: Kind has $WORKER_COUNT worker node(s); kind/cluster.yaml expects $EXPECTED_WORKERS." >&2
-  echo "         Recreate with: ./scripts/kind-down.sh && ./scripts/kind-up.sh" >&2
+  echo "         Recreate with: ./scripts/kind/kind-down.sh && ./scripts/kind/kind-up.sh" >&2
 fi
 
 echo "==> Kind ready."

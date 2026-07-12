@@ -16,7 +16,7 @@ lambda/**/*.zip
 .env
 terraform/tfc-bootstrap/terraform.tfvars
 terraform/s3-bootstrap/terraform.tfvars
-# Vendored by scripts/sync-live.sh (do not commit)
+# Vendored by scripts/lifecycle/sync-live.sh (do not commit)
 terraform/live/**/modules/
 terraform/live/**/lambda/
 # Local Kind / tooling

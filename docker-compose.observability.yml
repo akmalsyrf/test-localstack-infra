@@ -1,5 +1,5 @@
-# Optional local-dev observability: Grafana OSS + Loki OSS + Promtail OSS.
-# NOT started by scripts/up.sh or CI — use ./scripts/observability-up.sh.
+# Optional local-dev observability: Grafana OSS + Loki OSS + Grafana Alloy OSS.
+# NOT started by scripts/lifecycle/up.sh or CI — use ./scripts/observability/observability-up.sh.
 #
 # Ports: Grafana :3000, Loki :3100 (Kind NodePorts are 30080/30081/30082).
 # Resource note: this stack is CPU/RAM heavy — avoid on constrained machines
@@ -22,18 +22,29 @@ services:
       retries: 12
       start_period: 15s
 
-  promtail:
-    image: grafana/promtail:3.4.2
-    container_name: testinfra-promtail
-    command: ["-config.file=/etc/promtail/config.yml"]
+  alloy:
+    image: grafana/alloy:v1.9.2
+    container_name: testinfra-alloy
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
     volumes:
-      - ./observability/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
-      # docker_sd via sock works on Docker Desktop Mac + Linux; host /var/log/pods
-      # is often absent on Mac and would break compose up if mounted.
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # docker discovery + log source via sock (works on Docker Desktop Mac + Linux).
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
     depends_on:
       loki:
         condition: service_healthy
+    healthcheck:
+      # Alloy image has no wget/curl; probe the HTTP listen port via bash.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/12345'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   grafana:
     image: grafana/grafana-oss:11.5.2
@@ -61,3 +72,4 @@ services:
 volumes:
   loki-data:
   grafana-data:
+  alloy-data:

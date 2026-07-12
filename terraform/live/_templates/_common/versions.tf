@@ -1,5 +1,5 @@
 # Shared / network stacks — Terraform Cloud remote state, local execution.
-# Workspace name is injected by scripts/sync-live.sh
+# Workspace name is injected by scripts/lifecycle/sync-live.sh
 
 terraform {
   required_version = ">= 1.5.0"

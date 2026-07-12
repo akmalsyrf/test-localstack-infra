@@ -1,5 +1,5 @@
 # Optional local-only backend (no Terraform Cloud).
-# Use: BACKEND=local ./scripts/sync-live.sh
+# Use: BACKEND=local ./scripts/lifecycle/sync-live.sh
 
 terraform {
   required_version = ">= 1.5.0"

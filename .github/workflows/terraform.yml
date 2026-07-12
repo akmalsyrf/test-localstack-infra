@@ -6,7 +6,7 @@ name: Terraform LocalStack
 #   3) Terraform shared → network → backend  (no Kind)
 #   4) Kind (+ metrics-server) + latency smoke again
 #   5) Terraform eks + verify-apply
-# Local `./scripts/up.sh` still starts Kind then LocalStack for one-command DX.
+# Local `./scripts/lifecycle/up.sh` still starts Kind then LocalStack for one-command DX.
 #
 # Backend selection:
 #   - workflow_dispatch: choose via "backend" input (default s3)
@@ -84,9 +84,15 @@ jobs:
 
       - name: Sync live stacks (local backend for lint)
         run: |
-          chmod +x scripts/*.sh
+          chmod +x scripts/*/*.sh
           # Lint against generated local-backend roots; apply job configures the real backend.
-          BACKEND=local ./scripts/sync-live.sh
+          BACKEND=local ./scripts/lifecycle/sync-live.sh
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning -x -s bash scripts/*/*.sh
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
@@ -178,9 +184,9 @@ jobs:
       - name: Start LocalStack (no Kind yet)
         timeout-minutes: 5
         run: |
-          chmod +x scripts/*.sh
+          chmod +x scripts/*/*.sh
           # Kind-independent stacks must not share the runner with a 3-node Kind cluster.
-          SKIP_KIND=1 ./scripts/up.sh
+          SKIP_KIND=1 ./scripts/lifecycle/up.sh
           curl -sf http://localhost:4566/_localstack/health | tee /tmp/ls-health.json
           echo
           echo "LocalStack is healthy (Kind deferred until eks stage)."
@@ -188,17 +194,17 @@ jobs:
       - name: Configure Terraform backend
         timeout-minutes: 5
         run: |
-          chmod +x scripts/*.sh
+          chmod +x scripts/*/*.sh
           ENV="${{ steps.meta.outputs.environment }}"
           case "${{ steps.meta.outputs.backend }}" in
             s3)
-              ./scripts/use-s3-backend.sh "$ENV"
+              ./scripts/backend/use-s3-backend.sh "$ENV"
               ;;
             cloud)
-              ./scripts/use-tfc-backend.sh
+              ./scripts/backend/use-tfc-backend.sh
               ;;
             local)
-              ./scripts/use-local-backend.sh
+              ./scripts/backend/use-local-backend.sh
               ;;
             *)
               echo "::error::Unknown backend '${{ steps.meta.outputs.backend }}' (expected local|s3|cloud)"
@@ -208,29 +214,29 @@ jobs:
 
       - name: LocalStack latency smoke (pre-Kind)
         timeout-minutes: 2
-        run: ./scripts/check-localstack-latency.sh 5
+        run: ./scripts/checks/check-localstack-latency.sh 5
 
       - name: Terraform ${{ steps.meta.outputs.action }} (shared,network,backend)
         if: steps.meta.outputs.action != 'destroy'
         timeout-minutes: 25
         run: |
-          chmod +x scripts/*.sh
+          chmod +x scripts/*/*.sh
           ENV="${{ steps.meta.outputs.environment }}"
           ACTION="${{ steps.meta.outputs.action }}"
           # backend's terraform_remote_state needs shared+network state in the
           # configured backend. On plan (and fresh S3), apply upstream first;
           # env.sh also enforces this, but keep it explicit for CI clarity.
-          ./scripts/env.sh "$ENV" apply shared,network
-          ./scripts/env.sh "$ENV" "$ACTION" backend
+          ./scripts/lifecycle/env.sh "$ENV" apply shared,network
+          ./scripts/lifecycle/env.sh "$ENV" "$ACTION" backend
           if [ "$ACTION" = "plan" ]; then
-            ./scripts/env.sh "$ENV" plan shared,network
+            ./scripts/lifecycle/env.sh "$ENV" plan shared,network
           fi
 
       - name: Start Kind (before eks only)
         timeout-minutes: 15
         run: |
-          chmod +x scripts/*.sh
-          ./scripts/kind-up.sh
+          chmod +x scripts/*/*.sh
+          ./scripts/kind/kind-up.sh
 
           # Kind create can briefly starve LocalStack. Wait/recover WITHOUT
           # docker network connect or compose restart (connect breaks host :4566
@@ -259,27 +265,27 @@ jobs:
 
       - name: LocalStack latency smoke (post-Kind)
         timeout-minutes: 2
-        run: ./scripts/check-localstack-latency.sh 5
+        run: ./scripts/checks/check-localstack-latency.sh 5
 
       - name: Terraform ${{ steps.meta.outputs.action }} (eks)
         if: steps.meta.outputs.action != 'destroy'
         timeout-minutes: 25
         run: |
-          chmod +x scripts/*.sh
-          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" "${{ steps.meta.outputs.action }}" eks
+          chmod +x scripts/*/*.sh
+          ./scripts/lifecycle/env.sh "${{ steps.meta.outputs.environment }}" "${{ steps.meta.outputs.action }}" eks
 
       - name: Verify apply
         if: steps.meta.outputs.action == 'apply'
         timeout-minutes: 15
-        run: ./scripts/verify-apply.sh "${{ steps.meta.outputs.environment }}"
+        run: ./scripts/checks/verify-apply.sh "${{ steps.meta.outputs.environment }}"
 
       # Destroy needs Kind for eks first, then Kind-independent stacks (env.sh reverses order).
       - name: Terraform destroy (eks → backend → network → shared)
         if: steps.meta.outputs.action == 'destroy'
         timeout-minutes: 30
         run: |
-          chmod +x scripts/*.sh
-          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" destroy
+          chmod +x scripts/*/*.sh
+          ./scripts/lifecycle/env.sh "${{ steps.meta.outputs.environment }}" destroy
 
       - name: Diagnostics (on failure)
         if: failure()
@@ -310,4 +316,4 @@ jobs:
         run: |
           docker compose down -v || true
           # No-op safe if Kind never started (failed before eks stage).
-          ./scripts/kind-down.sh || true
+          ./scripts/kind/kind-down.sh || true

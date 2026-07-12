@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Category: checks
 # Fail fast if LocalStack is unhealthy or glacially slow (CI contention signal).
 # Usage: check-localstack-latency.sh [max_seconds]
 # Env: LOCALSTACK_ENDPOINT (default http://localhost:4566), AWS_DEFAULT_REGION
