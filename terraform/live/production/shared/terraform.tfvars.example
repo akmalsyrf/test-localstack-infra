@@ -1,12 +1,11 @@
 project_name               = "testinfra"
-environment                = "dev"
-environment_slug           = "dev"
+environment                = "prod"
+environment_slug           = "production"
 aws_region                 = "ap-southeast-3"
 localstack_endpoint        = "http://localhost:4566"
 tfc_organization           = ""
 kind_kubeconfig_path       = "/Users/mac/Documents/coding/studycase/localstack-infra/.kube/kind-config"
 kind_context               = "kind-testinfra-eks"
-log_retention_days         = 14
-sqs_depth_alarm_threshold  = 100
-secret_recovery_window_days = 7
-vpc_cidr_prefix = "10.3"
+log_retention_days         = 30
+sqs_depth_alarm_threshold  = 50
+secret_recovery_window_days = 30

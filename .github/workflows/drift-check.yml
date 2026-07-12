@@ -1,0 +1,88 @@
+name: Drift check (scheduled)
+
+# Independent cadence re-validation of "0 drift after fresh apply".
+#
+# Limitation (documented in docs/ARCHITECTURE.md): CI runners and LocalStack are
+# ephemeral — there is no multi-day infra to compare between jobs. This workflow:
+#   1) brings up LocalStack (+ Kind for eks)
+#   2) bootstraps BACKEND=s3 (persists state in LocalStack for the job duration)
+#   3) applies shared → network → backend → eks
+#   4) runs scripts/check-drift.sh
+# It cannot detect real out-of-band changes against a long-lived LocalStack —
+# that would need a persistent LocalStack instance or real AWS.
+# Notifications: rely on GitHub workflow-failure emails to repo watchers.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # daily 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+          - dev
+        default: staging
+
+concurrency:
+  group: drift-check-${{ github.event.inputs.environment || 'staging' }}
+  cancel-in-progress: false
+
+env:
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  AWS_DEFAULT_REGION: ap-southeast-3
+  AWS_EC2_METADATA_DISABLED: "true"
+  BACKEND: s3
+  LAMBDA_RUNTIME_EXECUTOR: docker
+
+jobs:
+  drift:
+    name: Drift check (${{ github.event.inputs.environment || 'staging' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.29.14"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+          terraform_wrapper: false
+
+      - name: Resolve environment
+        id: meta
+        run: |
+          echo "environment=${{ github.event.inputs.environment || 'staging' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Start LocalStack + Kind
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/up.sh
+          curl -sf http://localhost:4566/_localstack/health
+
+      - name: Bootstrap S3 backend + apply + drift check
+        run: |
+          chmod +x scripts/*.sh
+          ENV="${{ steps.meta.outputs.environment }}"
+          ./scripts/use-s3-backend.sh "$ENV"
+          ./scripts/env.sh "$ENV" apply
+          ./scripts/check-drift.sh "$ENV"
+
+      - name: Stop Kind + LocalStack
+        if: always()
+        run: |
+          docker compose down -v || true
+          ./scripts/kind-down.sh || true

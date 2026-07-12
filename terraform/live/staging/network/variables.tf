@@ -46,6 +46,24 @@ variable "kind_context" {
   default     = "kind-testinfra-eks"
 }
 
+variable "log_retention_days" {
+  type        = number
+  description = "CloudWatch log retention for backend EC2 log group (production uses longer)"
+  default     = 14
+}
+
+variable "sqs_depth_alarm_threshold" {
+  type        = number
+  description = "CloudWatch alarm threshold for SQS ApproximateNumberOfMessagesVisible"
+  default     = 100
+}
+
+variable "secret_recovery_window_days" {
+  type        = number
+  description = "Secrets Manager recovery window (production uses longer to reduce accidental loss)"
+  default     = 7
+}
+
 locals {
   prefix = "${var.project_name}-${var.environment}"
   tags = merge(var.tags, {

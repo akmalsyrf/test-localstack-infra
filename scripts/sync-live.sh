@@ -165,21 +165,34 @@ write_tfvars() {
   local short="$2"
   local cidr="$3"
   local tfc_org=""
+  local log_retention=14
+  local sqs_depth=100
+  local secret_recovery=7
 
   if [[ "$BACKEND" == "cloud" ]]; then
     tfc_org="$TFC_ORG"
   fi
 
+  # Production tier differs from staging/dev defaults (same modules, stricter ops knobs).
+  if [[ "$env" == "production" ]]; then
+    log_retention=30
+    sqs_depth=50
+    secret_recovery=30
+  fi
+
   for project in "${PROJECTS[@]}"; do
     cat > "$LIVE/$env/$project/terraform.tfvars" <<EOF
-project_name           = "${APP_NAME}"
-environment            = "$short"
-environment_slug       = "$env"
-aws_region             = "${AWS_REGION}"
-localstack_endpoint    = "${LOCALSTACK_ENDPOINT}"
-tfc_organization       = "${tfc_org}"
-kind_kubeconfig_path   = "${KIND_KUBECONFIG}"
-kind_context           = "${KIND_CONTEXT}"
+project_name               = "${APP_NAME}"
+environment                = "$short"
+environment_slug           = "$env"
+aws_region                 = "${AWS_REGION}"
+localstack_endpoint        = "${LOCALSTACK_ENDPOINT}"
+tfc_organization           = "${tfc_org}"
+kind_kubeconfig_path       = "${KIND_KUBECONFIG}"
+kind_context               = "${KIND_CONTEXT}"
+log_retention_days         = ${log_retention}
+sqs_depth_alarm_threshold  = ${sqs_depth}
+secret_recovery_window_days = ${secret_recovery}
 EOF
     if [[ "$project" == "network" ]]; then
       echo "vpc_cidr_prefix = \"$cidr\"" >> "$LIVE/$env/$project/terraform.tfvars"
@@ -197,7 +210,7 @@ case "$BACKEND" in
     ;;
 esac
 
-for env in dev staging; do
+for env in dev staging production; do
   for project in "${PROJECTS[@]}"; do
     sync_project "$env" "$project"
   done
@@ -205,8 +218,9 @@ done
 
 write_tfvars "dev" "dev" "10.3"
 write_tfvars "staging" "stg" "10.1"
+write_tfvars "production" "prod" "10.2"
 
-echo "Synced templates → live/{dev,staging}/{shared,network,backend,eks} (BACKEND=${BACKEND}, TFC_ORG=${TFC_ORG})"
+echo "Synced templates → live/{dev,staging,production}/{shared,network,backend,eks} (BACKEND=${BACKEND}, TFC_ORG=${TFC_ORG})"
 if [[ "$BACKEND" == "cloud" ]]; then
   echo "NOTE: TFC workspaces MUST use execution_mode=local. Run: ./scripts/ensure-tfc-local-execution.sh"
 fi

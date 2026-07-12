@@ -36,7 +36,11 @@ locals {
   # Prefer private subnets (EKS data plane); fall back to public if needed.
   eks_subnet_ids = length(local.network.private_subnet_ids) >= 2 ? slice(local.network.private_subnet_ids, 0, 2) : local.network.public_subnet_ids
   # Shared Kind cluster: unique NodePort per env (see kind/cluster.yaml mappings).
-  sample_node_port = var.environment_slug == "dev" ? 30081 : 30080
+  sample_node_port = ({
+    "dev"        = 30081
+    "staging"    = 30080
+    "production" = 30082
+  })[var.environment_slug]
 }
 
 module "eks" {

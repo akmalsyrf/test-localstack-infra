@@ -10,7 +10,7 @@ ACTION="${2:-apply}" # apply | destroy | plan
 STACK_FILTER="${3:-}"
 
 if [[ -z "$ENV" || ! -d "$ROOT/terraform/live/$ENV" ]]; then
-  echo "Usage: $0 <dev|staging> [apply|destroy|plan] [stack1,stack2,...]" >&2
+  echo "Usage: $0 <dev|staging|production> [apply|destroy|plan] [stack1,stack2,...]" >&2
   exit 1
 fi
 
