@@ -40,7 +40,7 @@ locals {
 
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "cloudwatch-${var.project_name}-ec2-backend-${var.environment_slug}"
-  retention_in_days = 14
+  retention_in_days = var.log_retention_days
   tags              = local.tags
 }
 
@@ -102,8 +102,48 @@ module "lambda_api" {
   tags = local.tags
 }
 
+# Ops alerts topic + CloudWatch alarms (EC2 / Lambda / SQS depth).
 resource "aws_sns_topic" "ops_alerts" {
   name = "${local.prefix}-ops-alerts"
+}
+
+# Subscriber for ops_alerts so alarms are not fire-and-forget.
+# Swap this SQS subscription for a real email/Slack/PagerDuty endpoint when moving
+# off LocalStack — SQS is used here because external delivery can't be verified
+# in this environment.
+resource "aws_sqs_queue" "ops_alerts_queue" {
+  name                      = "${local.prefix}-ops-alerts"
+  message_retention_seconds = 1209600 # 14 days
+  sqs_managed_sse_enabled   = true
+
+  depends_on = [aws_sns_topic.ops_alerts]
+}
+
+resource "aws_sqs_queue_policy" "ops_alerts_queue" {
+  queue_url = aws_sqs_queue.ops_alerts_queue.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowSNSPublish"
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = "SQS:SendMessage"
+      Resource  = aws_sqs_queue.ops_alerts_queue.arn
+      Condition = {
+        ArnEquals = { "aws:SourceArn" = aws_sns_topic.ops_alerts.arn }
+      }
+    }]
+  })
+}
+
+resource "aws_sns_topic_subscription" "ops_alerts_to_queue" {
+  topic_arn            = aws_sns_topic.ops_alerts.arn
+  protocol             = "sqs"
+  endpoint             = aws_sqs_queue.ops_alerts_queue.arn
+  raw_message_delivery = true
+
+  depends_on = [aws_sqs_queue_policy.ops_alerts_queue]
 }
 
 resource "aws_cloudwatch_metric_alarm" "ec2_status_check" {
@@ -150,7 +190,7 @@ resource "aws_cloudwatch_metric_alarm" "sqs_depth" {
   namespace           = "AWS/SQS"
   period              = 60
   statistic           = "Average"
-  threshold           = 100
+  threshold           = var.sqs_depth_alarm_threshold
   alarm_description   = "SQS standard queue depth high"
   alarm_actions       = [aws_sns_topic.ops_alerts.arn]
   ok_actions          = [aws_sns_topic.ops_alerts.arn]
@@ -210,4 +250,8 @@ output "api_invoke_url" {
 
 output "ops_alerts_topic_arn" {
   value = aws_sns_topic.ops_alerts.arn
+}
+
+output "ops_alerts_queue_url" {
+  value = aws_sqs_queue.ops_alerts_queue.url
 }

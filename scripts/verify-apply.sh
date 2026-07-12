@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Comprehensive post-apply verification against LocalStack (+ Kind/EKS).
-# Usage: verify-apply.sh <dev|staging>
+# Usage: verify-apply.sh <dev|staging|production>
 # Compatible with Bash 3.2+ (macOS /bin/bash) and Bash 4+/5 (CI).
 set -euo pipefail
 
@@ -15,7 +15,7 @@ PASS=0
 FAIL=0
 
 if [[ -z "$ENV" || ! -d "$ROOT/terraform/live/$ENV" ]]; then
-  echo "Usage: $0 <dev|staging>" >&2
+  echo "Usage: $0 <dev|staging|production>" >&2
   exit 1
 fi
 
@@ -31,11 +31,19 @@ case "$ENV" in
     EXPECT_ENV_SHORT="stg"
     EXPECT_VPC_CIDR="10.1.0.0/16"
     EXPECT_CIDR_PREFIX="10.1"
+    EXPECT_LOG_RETENTION="14"
     ;;
   dev)
     EXPECT_ENV_SHORT="dev"
     EXPECT_VPC_CIDR="10.3.0.0/16"
     EXPECT_CIDR_PREFIX="10.3"
+    EXPECT_LOG_RETENTION="14"
+    ;;
+  production)
+    EXPECT_ENV_SHORT="prod"
+    EXPECT_VPC_CIDR="10.2.0.0/16"
+    EXPECT_CIDR_PREFIX="10.2"
+    EXPECT_LOG_RETENTION="30"
     ;;
   *)
     echo "Unknown environment: $ENV" >&2
@@ -211,6 +219,7 @@ require_out LAMBDA_NAME backend lambda_function_name
 require_out API_ID backend api_id
 require_out API_URL backend api_invoke_url
 require_out OPS_ALERTS_ARN backend ops_alerts_topic_arn
+require_out OPS_ALERTS_QUEUE_URL backend ops_alerts_queue_url
 
 require_out EKS_CLUSTER_NAME eks cluster_name
 require_out EKS_CLUSTER_ARN eks cluster_arn
@@ -792,14 +801,14 @@ fi
 RETENTION="$(aws_ls logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" \
   --query "logGroups[?logGroupName=='${LOG_GROUP}'].retentionInDays | [0]" \
   --output text 2>/dev/null || true)"
-if [[ "$RETENTION" == "14" ]]; then
-  ok "log group retention is 14 days"
+if [[ "$RETENTION" == "$EXPECT_LOG_RETENTION" ]]; then
+  ok "log group retention is ${EXPECT_LOG_RETENTION} days"
 else
   # LocalStack may omit retention; warn as soft fail only if empty
   if [[ -z "$RETENTION" || "$RETENTION" == "None" || "$RETENTION" == "null" ]]; then
     ok "log group retention not reported by LocalStack (acceptable)"
   else
-    fail "log group retention unexpected (got $RETENTION)"
+    fail "log group retention unexpected (got $RETENTION, want $EXPECT_LOG_RETENTION)"
   fi
 fi
 
@@ -905,6 +914,24 @@ else
   fail "SNS ops alerts topic missing ($OPS_ALERTS_ARN)"
 fi
 
+SUBS="$(aws_ls sns list-subscriptions-by-topic --topic-arn "$OPS_ALERTS_ARN" --output json 2>/dev/null || echo '{}')"
+if echo "$SUBS" | python3 -c '
+import json,sys
+subs=json.load(sys.stdin).get("Subscriptions") or []
+sys.exit(0 if any(s.get("Protocol")=="sqs" for s in subs) else 1)
+'; then
+  ok "SNS ops alerts has an SQS subscription"
+else
+  fail "SNS ops alerts topic has no subscription — alarms would fire into the void"
+fi
+
+if [[ -n "$OPS_ALERTS_QUEUE_URL" ]] && aws_ls sqs get-queue-attributes \
+  --queue-url "$OPS_ALERTS_QUEUE_URL" --attribute-names QueueArn >/dev/null 2>&1; then
+  ok "ops alerts SQS queue exists"
+else
+  fail "ops alerts SQS queue missing"
+fi
+
 ALARM_NAMES_JSON="$(aws_ls cloudwatch describe-alarms --output json 2>/dev/null || echo '{}')"
 check_cw_alarm() {
   local want="$1"
@@ -914,17 +941,24 @@ check_cw_alarm() {
   echo "$ALARM_NAMES_JSON" | python3 -c '
 import json,sys
 want=sys.argv[1]
+topic=sys.argv[2]
 alarms=json.load(sys.stdin).get("MetricAlarms") or []
-names=[a.get("AlarmName") for a in alarms]
-if not names:
+match=None
+for a in alarms:
+  if a.get("AlarmName")==want:
+    match=a
+    break
+if match is None:
   sys.exit(2)
-sys.exit(0 if want in names else 1)
-' "$want"
+actions=match.get("AlarmActions") or []
+sys.exit(0 if topic in actions else 3)
+' "$want" "$OPS_ALERTS_ARN"
   rc=$?
   set -e
   case "$rc" in
-    0) ok "CloudWatch alarm $label exists" ;;
+    0) ok "CloudWatch alarm $label exists and AlarmActions includes ops topic" ;;
     2) ok "CloudWatch alarm $label not reported by LocalStack (configured in TF; drift check covers it)" ;;
+    3) fail "CloudWatch alarm $label exists but AlarmActions missing ops topic" ;;
     *) fail "CloudWatch alarm $label missing ($want)" ;;
   esac
 }
@@ -1478,50 +1512,23 @@ else
   ok "S3 remote-state bucket not present (BACKEND=local; optional)"
 fi
 
-# --- terraform drift (no pending changes) ------------------------------------
+# --- terraform drift (delegated to scripts/check-drift.sh) -------------------
 
 section "Terraform drift (plan -detailed-exitcode)"
 
-check_drift() {
-  local stack="$1"
-  local dir="$LIVE/$stack"
-  local plan_file="/tmp/verify-plan-${ENV}-${stack}.txt"
-  local attempt rc=1
-  # LocalStack can briefly reorder SG/subnet attributes right after apply.
-  for attempt in 1 2 3; do
-    set +e
-    terraform -chdir="$dir" plan -input=false -no-color -detailed-exitcode -lock=false \
-      -var="localstack_endpoint=${ENDPOINT}" >"$plan_file" 2>&1
-    rc=$?
-    set -e
-    case "$rc" in
-      0)
-        ok "no drift in $stack"
-        return 0
-        ;;
-      2)
-        if [[ "$attempt" -lt 3 ]]; then
-          echo "  ...  transient drift in $stack (attempt $attempt/3), retrying..."
-          sleep 3
-          continue
-        fi
-        fail "drift detected in $stack (plan wants changes)"
-        echo "      see $plan_file"
-        grep -E '^(  # |  [-+~]|Plan:|Terraform will)' "$plan_file" | head -n 60 || true
-        return 0
-        ;;
-      *)
-        fail "terraform plan failed for $stack (exit $rc)"
-        tail -n 40 "$plan_file" >&2 || true
-        return 0
-        ;;
-    esac
-  done
-}
-
-for stack in shared network backend eks; do
-  check_drift "$stack"
-done
+DRIFT_OUT="/tmp/verify-drift-${ENV}.txt"
+set +e
+"$ROOT/scripts/check-drift.sh" "$ENV" | tee "$DRIFT_OUT"
+DRIFT_RC=${PIPESTATUS[0]}
+set -e
+# Merge PASS/FAIL lines into this run's counters (check-drift prints the same format).
+DRIFT_PASS="$(grep -c '^  PASS  ' "$DRIFT_OUT" 2>/dev/null || true)"
+DRIFT_FAIL="$(grep -c '^  FAIL  ' "$DRIFT_OUT" 2>/dev/null || true)"
+PASS=$((PASS + ${DRIFT_PASS:-0}))
+FAIL=$((FAIL + ${DRIFT_FAIL:-0}))
+if [[ "$DRIFT_RC" -ne 0 && "${DRIFT_FAIL:-0}" -eq 0 ]]; then
+  fail "check-drift.sh exited $DRIFT_RC without FAIL lines"
+fi
 
 # --- summary -----------------------------------------------------------------
 

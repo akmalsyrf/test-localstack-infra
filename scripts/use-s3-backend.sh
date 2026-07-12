@@ -12,7 +12,7 @@ REGION="${AWS_DEFAULT_REGION:-ap-southeast-3}"
 BOOTSTRAP="$ROOT/terraform/s3-bootstrap"
 
 if [[ ! -d "$ROOT/terraform/live/$ENV" ]]; then
-  echo "Usage: $0 <dev|staging>" >&2
+  echo "Usage: $0 <dev|staging|production>" >&2
   exit 1
 fi
 

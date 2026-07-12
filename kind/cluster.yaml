@@ -20,6 +20,10 @@ nodes:
       - containerPort: 30081
         hostPort: 30081
         protocol: TCP
+      # production sample Service
+      - containerPort: 30082
+        hostPort: 30082
+        protocol: TCP
   - role: worker
     labels:
       role: worker

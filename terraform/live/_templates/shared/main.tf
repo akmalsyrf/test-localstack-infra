@@ -18,9 +18,10 @@ module "s3_ec2_backend" {
 module "secrets" {
   source = "../../../modules/secrets"
 
-  prefix      = local.prefix
-  secret_name = "${var.project_name}/app/api/env/${var.environment}"
-  tags        = local.tags
+  prefix                  = local.prefix
+  secret_name             = "${var.project_name}/app/api/env/${var.environment}"
+  recovery_window_in_days = var.secret_recovery_window_days
+  tags                    = local.tags
 }
 
 locals {

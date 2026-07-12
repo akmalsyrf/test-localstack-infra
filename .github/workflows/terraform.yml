@@ -21,6 +21,7 @@ on:
         options:
           - dev
           - staging
+          - production
         default: staging
       action:
         description: Terraform action
