@@ -199,9 +199,18 @@ uses_s3_backend() {
 
 stack_has_state() {
   local stack="$1"
-  if uses_s3_backend || uses_tfc_cloud; then
-    # Remote backends: probe via outputs after init (no local terraform.tfstate).
-    terraform -chdir="$LIVE/$stack" init -input=false >/dev/null 2>&1 || return 1
+  if uses_s3_backend; then
+    # Prefer an object probe — terraform output after a bare init can false-positive
+    # or fail for unrelated reasons on empty remote state.
+    local bucket="tfstate-testinfra-${ENV}"
+    local key="${stack}/terraform.tfstate"
+    aws --endpoint-url="${LOCALSTACK_ENDPOINT:-http://localhost:4566}" \
+      --region "${AWS_DEFAULT_REGION:-ap-southeast-3}" \
+      s3api head-object --bucket "$bucket" --key "$key" >/dev/null 2>&1
+    return $?
+  fi
+  if uses_tfc_cloud; then
+    tf_init "$LIVE/$stack" >/dev/null 2>&1 || return 1
     terraform -chdir="$LIVE/$stack" output -json >/dev/null 2>&1
     return $?
   fi
@@ -267,24 +276,26 @@ destroy_stack() {
     -var="localstack_endpoint=${LOCALSTACK_ENDPOINT}"
 }
 
-# Local backend: dependent stacks read sibling terraform.tfstate via
-# terraform_remote_state. Ephemeral CI (and fresh checkouts) have no state until
-# apply — so plan must apply upstream stacks first.
-ensure_upstream_state_for_plan() {
+# Dependent stacks read sibling state via terraform_remote_state. Ephemeral CI
+# (and fresh S3 buckets) have no state until apply — so plan/apply of backend/eks
+# must materialize upstream stacks first.
+ensure_upstream_state() {
   local stack="$1"
   case "$stack" in
     backend)
       for dep in shared network; do
         if ! stack_has_state "$dep"; then
-          echo "==> plan needs $dep state (terraform_remote_state); applying $dep first..."
+          echo "==> $ACTION needs $dep state (terraform_remote_state); applying $dep first..."
           apply_stack "$dep"
+        else
+          echo "==> upstream $dep state present"
         fi
       done
       ;;
     eks)
       for dep in network backend; do
         if ! stack_has_state "$dep"; then
-          echo "==> plan needs $dep state (terraform_remote_state); applying $dep first..."
+          echo "==> $ACTION needs $dep state (terraform_remote_state); applying $dep first..."
           if [[ "$dep" == "backend" ]]; then
             for upstream in shared network; do
               if ! stack_has_state "$upstream"; then
@@ -293,6 +304,8 @@ ensure_upstream_state_for_plan() {
             done
           fi
           apply_stack "$dep"
+        else
+          echo "==> upstream $dep state present"
         fi
       done
       ;;
@@ -335,6 +348,7 @@ fi
 case "$ACTION" in
   apply)
     for stack in "${STACKS[@]}"; do
+      ensure_upstream_state "$stack"
       apply_stack "$stack"
     done
     if includes_stack backend; then
@@ -361,7 +375,7 @@ case "$ACTION" in
     ;;
   plan)
     for stack in "${STACKS[@]}"; do
-      ensure_upstream_state_for_plan "$stack"
+      ensure_upstream_state "$stack"
       plan_stack "$stack"
     done
     ;;

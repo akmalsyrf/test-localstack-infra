@@ -212,10 +212,19 @@ jobs:
 
       - name: Terraform ${{ steps.meta.outputs.action }} (shared,network,backend)
         if: steps.meta.outputs.action != 'destroy'
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: |
           chmod +x scripts/*.sh
-          ./scripts/env.sh "${{ steps.meta.outputs.environment }}" "${{ steps.meta.outputs.action }}" shared,network,backend
+          ENV="${{ steps.meta.outputs.environment }}"
+          ACTION="${{ steps.meta.outputs.action }}"
+          # backend's terraform_remote_state needs shared+network state in the
+          # configured backend. On plan (and fresh S3), apply upstream first;
+          # env.sh also enforces this, but keep it explicit for CI clarity.
+          ./scripts/env.sh "$ENV" apply shared,network
+          ./scripts/env.sh "$ENV" "$ACTION" backend
+          if [ "$ACTION" = "plan" ]; then
+            ./scripts/env.sh "$ENV" plan shared,network
+          fi
 
       - name: Start Kind (before eks only)
         timeout-minutes: 15
