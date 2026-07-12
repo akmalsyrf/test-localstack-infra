@@ -42,3 +42,9 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "localstack_endpoint" {
+  type        = string
+  description = "Base URL for LocalStack (used in api_invoke_url output)"
+  default     = "http://localhost:4566"
+}

@@ -80,10 +80,11 @@ module "messaging" {
 module "lambda_api" {
   source = "./modules/lambda-api"
 
-  prefix          = local.prefix
-  stage_name      = var.environment
-  lambda_zip_path = "${path.module}/lambda/function.zip"
-  dlq_arn         = module.messaging.standard_dlq_arn
+  prefix               = local.prefix
+  stage_name           = var.environment
+  lambda_zip_path      = "${path.module}/../../../../lambda/api/function.zip"
+  dlq_arn              = module.messaging.standard_dlq_arn
+  localstack_endpoint  = var.localstack_endpoint
   environment_variables = {
     SERVICE     = "${var.project_name}-api"
     ENVIRONMENT = var.environment

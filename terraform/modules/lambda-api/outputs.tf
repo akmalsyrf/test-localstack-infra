@@ -11,7 +11,7 @@ output "api_id" {
 }
 
 output "api_invoke_url" {
-  value = "http://localhost:4566/restapis/${aws_api_gateway_rest_api.api.id}/${aws_api_gateway_stage.this.stage_name}/_user_request_/"
+  value = "${trimsuffix(var.localstack_endpoint, "/")}/restapis/${aws_api_gateway_rest_api.api.id}/${aws_api_gateway_stage.this.stage_name}/_user_request_/"
 }
 
 output "api_stage_name" {
