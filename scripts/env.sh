@@ -177,6 +177,16 @@ prepare_kind_localstack_bridge() {
   echo "==> Ensuring $LS_CONTAINER on Docker network '$KIND_DOCKER_NETWORK' (before eks)..."
   docker network connect "$KIND_DOCKER_NETWORK" "$LS_CONTAINER" 2>/dev/null || true
   ensure_localstack_endpoint
+  # Re-bake S3 templates with the working endpoint. The terraform backend "s3"
+  # block cannot use variables; sync-live injects LOCALSTACK_ENDPOINT into
+  # versions.tf. terraform_remote_state uses var.localstack_endpoint (see
+  # main.s3.tf) so -var/tfvars also cover sibling state reads after Kind attach.
+  if uses_s3_backend; then
+    echo "==> Re-syncing S3 live stacks with endpoint $LOCALSTACK_ENDPOINT..."
+    BACKEND=s3 LOCALSTACK_ENDPOINT="$LOCALSTACK_ENDPOINT" \
+      APP_NAME="${APP_NAME:-testinfra}" \
+      "$ROOT/scripts/sync-live.sh"
+  fi
 }
 
 uses_tfc_cloud() {

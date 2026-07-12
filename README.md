@@ -76,10 +76,10 @@ If you see `Preparing the remote apply...`, the workspace is still **remote** �
 
 ## GitHub Actions
 
-1. Push to `main` → plan+apply **staging**; PRs → **plan** only (applies upstream stacks first so sibling `terraform_remote_state` works on a fresh runner)
-2. Manual runs: **Actions → Terraform LocalStack → Run workflow** (`dev` / `staging` / `production`; production is dispatch-only)
+1. Push to `main` → plan+apply **staging** with `BACKEND=s3`; PRs → **plan** only (applies upstream stacks first so sibling `terraform_remote_state` works on a fresh runner)
+2. Manual runs: **Actions → Terraform LocalStack → Run workflow** — choose `environment`, `action`, and **`backend`** (`local` / `s3` / `cloud`)
 3. Scheduled **Drift check** (daily) + manual: [`.github/workflows/drift-check.yml`](.github/workflows/drift-check.yml) — re-validates 0-drift after a fresh apply (see Architecture for ephemeral-LocalStack limits)
-4. Optional TFC: set secret `TF_TOKEN_app_terraform_io` and change workflow `BACKEND` to `cloud`
+4. Optional TFC (`backend=cloud`): set secret `TF_TOKEN_app_terraform_io`
 
 Workflow files: [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml), [`.github/workflows/drift-check.yml`](.github/workflows/drift-check.yml)
 
