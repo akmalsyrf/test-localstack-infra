@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
+# Category: lifecycle
 # Sync _templates → live/{dev,staging}/{shared,network,backend,eks}
 #
 # BACKEND=local (default) → local terraform.tfstate (recommended for LocalStack)
 # BACKEND=s3              → S3 + DynamoDB remote state on LocalStack
-#                           (run ./scripts/use-s3-backend.sh first to bootstrap)
+#                           (run ./scripts/backend/use-s3-backend.sh first to bootstrap)
 # BACKEND=cloud           → Terraform Cloud remote state (org ExperimentTerraform)
 #                           Requires workspace execution_mode=local or apply fails.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TPL="$ROOT/terraform/live/_templates"
 LIVE="$ROOT/terraform/live"
 MODULES="$ROOT/terraform/modules"
@@ -29,6 +30,7 @@ vendor_modules() {
   # Copy modules referenced by this stack's main.tf, then nested relative modules
   # (e.g. modules/eks → ../iam-eks-workload).
   local name nested
+  # shellcheck disable=SC2013  # module names are single tokens from sed
   for name in $(grep -E 'source\s*=\s*"(\.\./)+modules/[^"]+"' "$main" \
     | sed -E 's|.*modules/([^"]+)".*|\1|' | sort -u); do
     if [[ -d "$MODULES/$name" ]]; then
@@ -70,6 +72,8 @@ stage_lambda_zip() {
     (cd "$ROOT/lambda/api" && zip -q -j function.zip handler.py)
   fi
   cp "$ROOT/lambda/api/function.zip" "$dest/lambda/function.zip"
+  # Intentional: leave ${path.module} as Terraform interpolation in the file.
+  # shellcheck disable=SC2016
   if [[ "$(uname)" == "Darwin" ]]; then
     sed -i '' 's|lambda_zip_path = "${path.module}/../../../../lambda/api/function.zip"|lambda_zip_path = "${path.module}/lambda/function.zip"|g' "$dest/main.tf"
   else
@@ -222,8 +226,8 @@ write_tfvars "production" "prod" "10.2"
 
 echo "Synced templates → live/{dev,staging,production}/{shared,network,backend,eks} (BACKEND=${BACKEND}, TFC_ORG=${TFC_ORG})"
 if [[ "$BACKEND" == "cloud" ]]; then
-  echo "NOTE: TFC workspaces MUST use execution_mode=local. Run: ./scripts/ensure-tfc-local-execution.sh"
+  echo "NOTE: TFC workspaces MUST use execution_mode=local. Run: ./scripts/backend/ensure-tfc-local-execution.sh"
 fi
 if [[ "$BACKEND" == "s3" ]]; then
-  echo "NOTE: Ensure s3-bootstrap applied (./scripts/use-s3-backend.sh <env>) before first init."
+  echo "NOTE: Ensure s3-bootstrap applied (./scripts/backend/use-s3-backend.sh <env>) before first init."
 fi

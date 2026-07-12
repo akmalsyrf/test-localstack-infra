@@ -1,5 +1,5 @@
 # S3 + DynamoDB remote state on LocalStack (BACKEND=s3).
-# Placeholders injected by scripts/sync-live.sh
+# Placeholders injected by scripts/lifecycle/sync-live.sh
 
 terraform {
   required_version = ">= 1.5.0"

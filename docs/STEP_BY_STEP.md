@@ -6,10 +6,10 @@ How to apply / destroy with **LocalStack + Kind (EKS mirror)**, optionally use *
 
 - Docker Desktop (or Docker Engine)
 - Terraform >= 1.5
-- AWS CLI v2 (`aws`) — used by `scripts/verify-apply.sh`
+- AWS CLI v2 (`aws`) — used by `scripts/checks/verify-apply.sh`
 - `kubectl`
 - `curl`, `zip`, `python3`
-- `kind` (auto-downloaded to `./bin/kind` by `scripts/kind-up.sh` if missing)
+- `kind` (auto-downloaded to `./bin/kind` by `scripts/kind/kind-up.sh` if missing)
 - Optional: Terraform Cloud org + API token (only if `BACKEND=cloud`)
 
 ---
@@ -17,19 +17,19 @@ How to apply / destroy with **LocalStack + Kind (EKS mirror)**, optionally use *
 ## Recommended: Kind + LocalStack + local state
 
 ```bash
-chmod +x scripts/*.sh
-./scripts/up.sh                    # Kind first, then LocalStack
-./scripts/use-local-backend.sh
-./scripts/env.sh staging apply     # shared → network → backend → eks + verify
+chmod +x scripts/*/*.sh
+./scripts/lifecycle/up.sh                    # Kind first, then LocalStack
+./scripts/backend/use-local-backend.sh
+./scripts/lifecycle/env.sh staging apply     # shared → network → backend → eks + verify
 ```
 
 Flow:
 
 ```mermaid
 flowchart TD
-  up[./scripts/up.sh] --> kind[kind-up.sh<br/>cluster testinfra-eks]
+  up[./scripts/lifecycle/up.sh] --> kind[kind-up.sh<br/>cluster testinfra-eks]
   up --> ls[docker compose up<br/>EKS_K8S_PROVIDER=local]
-  apply[./scripts/env.sh staging apply] --> sync[sync-live.sh]
+  apply[./scripts/lifecycle/env.sh staging apply] --> sync[sync-live.sh]
   sync --> s1[shared]
   s1 --> s2[network]
   s2 --> s3[backend]
@@ -40,16 +40,16 @@ flowchart TD
 If LocalStack is wedged (SNS/SQS hangs), reset it (Kind can stay up):
 
 ```bash
-docker compose down -v && ./scripts/up.sh
-./scripts/env.sh staging apply
+docker compose down -v && ./scripts/lifecycle/up.sh
+./scripts/lifecycle/env.sh staging apply
 ```
 
 Full teardown:
 
 ```bash
-./scripts/env.sh staging destroy
+./scripts/lifecycle/env.sh staging destroy
 docker compose down -v
-./scripts/kind-down.sh
+./scripts/kind/kind-down.sh
 ```
 
 ---
@@ -61,11 +61,11 @@ Workspaces must use **execution_mode=local** (LocalStack/Kind are not reachable 
 ```bash
 cd terraform/tfc-bootstrap && terraform init && terraform apply
 export TF_TOKEN_app_terraform_io="..."
-./scripts/use-tfc-backend.sh
-./scripts/env.sh staging apply
+./scripts/backend/use-tfc-backend.sh
+./scripts/lifecycle/env.sh staging apply
 ```
 
-If you see `Preparing the remote apply...`, run `./scripts/ensure-tfc-local-execution.sh` or switch to `./scripts/use-local-backend.sh`.
+If you see `Preparing the remote apply...`, run `./scripts/backend/ensure-tfc-local-execution.sh` or switch to `./scripts/backend/use-local-backend.sh`.
 
 ---
 
@@ -75,13 +75,13 @@ Default `BACKEND=local`. PRs → **plan** staging (applies upstream stacks first
 `terraform_remote_state` can resolve on a fresh runner); push to main → **apply** staging.
 
 
-CI starts **Kind + LocalStack** via `./scripts/up.sh`, then runs Terraform.
+CI starts **Kind + LocalStack** via `./scripts/lifecycle/up.sh`, then runs Terraform.
 
 ---
 
 ## What verify-apply checks
 
-`scripts/verify-apply.sh` asserts infra truths, not only “resource exists”:
+`scripts/checks/verify-apply.sh` asserts infra truths, not only “resource exists”:
 
 | Area | Examples |
 |---|---|
@@ -99,12 +99,12 @@ CI starts **Kind + LocalStack** via `./scripts/up.sh`, then runs Terraform.
 
 | Symptom | Fix |
 |---|---|
-| SNS CreateTopic 501 / "not yet implemented or pro" | Do **not** set `PROVIDER_OVERRIDE_SNS=asf` on LocalStack free. Reset: `docker compose down -v && ./scripts/up.sh` |
+| SNS CreateTopic 501 / "not yet implemented or pro" | Do **not** set `PROVIDER_OVERRIDE_SNS=asf` on LocalStack free. Reset: `docker compose down -v && ./scripts/lifecycle/up.sh` |
 | SNS hang / SQS URL format errors | Compose uses `SQS_ENDPOINT_STRATEGY=off` (Terraform-compatible). Reset LocalStack then re-apply. |
 | `Preparing the remote apply...` / missing `../../../modules` | Workspace is remote → `ensure-tfc-local-execution.sh` or local backend |
 | `InvalidPermission.Duplicate` on SG rules | Re-sync + apply; SG uses inline rules with `ignore_changes` |
-| `connection refused :4566` | `./scripts/up.sh` |
-| Kind / kubeconfig errors | Re-run `./scripts/kind-up.sh`, ensure `.kube/kind-config` exists |
+| `connection refused :4566` | `./scripts/lifecycle/up.sh` |
+| Kind / kubeconfig errors | Re-run `./scripts/kind/kind-up.sh`, ensure `.kube/kind-config` exists |
 | NodePort smoke fails on `:30080` | Ensure Kind cluster from `kind/cluster.yaml` (extraPortMappings) and sample Service uses node_port 30080 |
 | TFC token errors | Export `TF_TOKEN_app_terraform_io` or use `BACKEND=local` |
 

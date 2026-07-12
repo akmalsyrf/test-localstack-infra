@@ -3,7 +3,7 @@
 # LocalStack community returns "API for service 'eks' not yet implemented or pro".
 # This module mirrors the usual LocalStack/AWS EKS Terraform shape:
 #   IAM cluster role + node role  →  cluster registration  →  node group  →  workloads
-# but the control plane is Kind (see scripts/kind-up.sh + kind/cluster.yaml).
+# but the control plane is Kind (see scripts/kind/kind-up.sh + kind/cluster.yaml).
 # Outputs intentionally match aws_eks_cluster / aws_eks_node_group fields.
 
 data "aws_iam_policy_document" "eks_assume" {
@@ -92,7 +92,7 @@ data "external" "kind" {
 }
 
 # Discover LocalStack IP on the Kind Docker network (pods → :4566).
-# Host Terraform uses TF_VAR_localstack_endpoint from scripts/env.sh (may be
+# Host Terraform uses TF_VAR_localstack_endpoint from scripts/lifecycle/env.sh (may be
 # container IP when Linux CI breaks localhost publish after network attach).
 data "external" "localstack_network" {
   program = ["bash", "${path.module}/scripts/localstack-network-info.sh"]

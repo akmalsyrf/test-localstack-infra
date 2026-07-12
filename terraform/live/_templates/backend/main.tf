@@ -200,6 +200,84 @@ resource "aws_cloudwatch_metric_alarm" "sqs_depth" {
   }
 }
 
+# Native CloudWatch dashboard — zero runtime footprint (safe in CI).
+# Metrics mirror the existing alarms + API Gateway stage metrics_enabled.
+resource "aws_cloudwatch_dashboard" "main" {
+  dashboard_name = "${local.prefix}-ops"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title  = "EC2 StatusCheckFailed"
+          region = var.aws_region
+          period = 60
+          stat   = "Maximum"
+          metrics = [
+            ["AWS/EC2", "StatusCheckFailed", "InstanceId", aws_instance.backend.id]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title  = "Lambda Errors / Invocations / Duration"
+          region = var.aws_region
+          period = 60
+          metrics = [
+            ["AWS/Lambda", "Errors", "FunctionName", module.lambda_api.lambda_function_name, { stat = "Sum" }],
+            [".", "Invocations", ".", ".", { stat = "Sum" }],
+            [".", "Duration", ".", ".", { stat = "Average", yAxis = "right" }]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title  = "SQS ApproximateNumberOfMessagesVisible"
+          region = var.aws_region
+          period = 60
+          stat   = "Average"
+          metrics = [
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", module.messaging.standard_queue_name],
+            [".", ".", ".", element(split(":", module.messaging.fifo_queue_arn), 5)]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title  = "API Gateway 4XX / 5XX / Latency"
+          region = var.aws_region
+          period = 60
+          metrics = [
+            ["AWS/ApiGateway", "4XXError", "ApiName", "${local.prefix}-api", "Stage", module.lambda_api.api_stage_name, { stat = "Sum" }],
+            [".", "5XXError", ".", ".", ".", ".", { stat = "Sum" }],
+            [".", "Latency", ".", ".", ".", ".", { stat = "Average", yAxis = "right" }]
+          ]
+        }
+      }
+    ]
+  })
+}
+
 output "instance_id" {
   value = aws_instance.backend.id
 }
@@ -254,4 +332,13 @@ output "ops_alerts_topic_arn" {
 
 output "ops_alerts_queue_url" {
   value = aws_sqs_queue.ops_alerts_queue.url
+}
+
+output "dashboard_name" {
+  value = aws_cloudwatch_dashboard.main.dashboard_name
+}
+
+output "dashboard_url" {
+  # Real-AWS console deep link (not usable against LocalStack; kept as migration reference).
+  value = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=${aws_cloudwatch_dashboard.main.dashboard_name}"
 }

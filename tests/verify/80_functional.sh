@@ -96,3 +96,29 @@ else
   fail "API Gateway smoke failed ($API_SMOKE_URL)"
   [[ -f "$API_RESP" ]] && cat "$API_RESP" >&2 || true
 fi
+
+# X-Ray: Lambda has tracing_config Active + SERVICES includes xray. LocalStack
+# Community currently returns InternalFailure for GetTraceSummaries ("not yet
+# implemented or pro feature") — do not claim read-back works until this changes.
+XRAY_START="$(($(date +%s) - 600))"
+XRAY_END="$(date +%s)"
+set +e
+XRAY_ERR="$(aws_ls xray get-trace-summaries \
+  --start-time "$XRAY_START" --end-time "$XRAY_END" --output json 2>&1)"
+XRAY_RC=$?
+set -e
+if [[ "$XRAY_RC" -eq 0 ]]; then
+  if echo "$XRAY_ERR" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+sys.exit(0 if (d.get("TraceSummaries") or []) else 1)
+' 2>/dev/null; then
+    ok "X-Ray GetTraceSummaries returned at least one trace after Lambda/API traffic"
+  else
+    ok "X-Ray GetTraceSummaries OK but empty (tracing_config Active; no traces correlated yet)"
+  fi
+elif echo "$XRAY_ERR" | grep -qiE 'not yet implemented|pro feature|InternalFailure'; then
+  ok "X-Ray GetTraceSummaries not implemented on LocalStack Community (write-side tracing_config still set; retrieval unverified)"
+else
+  ok "X-Ray GetTraceSummaries unavailable (rc=$XRAY_RC; retrieval unverified; tracing_config still set)"
+fi

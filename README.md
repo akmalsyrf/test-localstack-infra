@@ -33,7 +33,7 @@ flowchart LR
 
 Optional remote state:
 
-- `BACKEND=s3` — S3 + DynamoDB on LocalStack (`./scripts/use-s3-backend.sh`)
+- `BACKEND=s3` — S3 + DynamoDB on LocalStack (`./scripts/backend/use-s3-backend.sh`)
 - `BACKEND=cloud` — Terraform Cloud (`execution_mode=local`). Org: **`ExperimentTerraform`**.
 
 ## Workspace map (optional TFC)
@@ -49,30 +49,32 @@ Apply order per environment: **shared → network → backend → eks**
 
 ## Quick start (recommended)
 
+Script catalog: **[scripts/README.md](scripts/README.md)** (single source of truth).
+
 ```bash
-chmod +x scripts/*.sh
-./scripts/up.sh                      # Kind + LocalStack
-./scripts/use-local-backend.sh       # default: local tfstate (no TFC remote apply)
-./scripts/env.sh staging apply       # includes verify-apply.sh
-./scripts/verify-apply.sh staging    # re-run checks anytime
+chmod +x scripts/*/*.sh
+./scripts/lifecycle/up.sh                 # Kind + LocalStack
+./scripts/backend/use-local-backend.sh    # default: local tfstate (no TFC remote apply)
+./scripts/lifecycle/env.sh staging apply  # includes verify-apply
+./scripts/checks/verify-apply.sh staging  # re-run checks anytime
 ```
 
 ### Optional: S3 + DynamoDB remote state (LocalStack)
 
 ```bash
-./scripts/use-s3-backend.sh staging  # bootstrap bucket+lock table, sync BACKEND=s3
-./scripts/env.sh staging apply
+./scripts/backend/use-s3-backend.sh staging  # bootstrap bucket+lock table, sync BACKEND=s3
+./scripts/lifecycle/env.sh staging apply
 ```
 
 ### Optional: Terraform Cloud remote state
 
 ```bash
 export TF_TOKEN_app_terraform_io="..."
-./scripts/use-tfc-backend.sh             # enforces execution_mode=local
-./scripts/env.sh staging apply
+./scripts/backend/use-tfc-backend.sh             # enforces execution_mode=local
+./scripts/lifecycle/env.sh staging apply
 ```
 
-If you see `Preparing the remote apply...`, the workspace is still **remote** — run `./scripts/ensure-tfc-local-execution.sh` or switch back with `./scripts/use-local-backend.sh`.
+If you see `Preparing the remote apply...`, the workspace is still **remote** — run `./scripts/backend/ensure-tfc-local-execution.sh` or switch back with `./scripts/backend/use-local-backend.sh`.
 
 ## GitHub Actions
 
@@ -89,18 +91,21 @@ Workflow files: [`.github/workflows/terraform.yml`](.github/workflows/terraform.
 |---|---|
 | [docs/STEP_BY_STEP.md](docs/STEP_BY_STEP.md) | Local & CI apply/destroy, optional TFC, troubleshooting |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Flowcharts, Kind↔EKS mirror, CI Kind-deferred sequencing |
+| [scripts/README.md](scripts/README.md) | Script catalog (lifecycle / backend / kind / checks / observability / debug) |
 
 ## Layout
 
 ```
 localstack-infra/
 ├── .github/workflows/{terraform,drift-check}.yml
-├── docker-compose.yml
+├── docker-compose.yml                 # LocalStack (+ optional Portainer profile: debug)
+├── docker-compose.observability.yml   # Grafana/Loki/Alloy (opt-in; not in up.sh/CI)
+├── observability/                     # Grafana provisioning + Loki/Alloy configs
 ├── kind/cluster.yaml
 ├── docs/
 ├── lambda/api/
-├── scripts/          # up, kind-up/down, env, verify-apply, check-drift, use-*-backend, sync-live
-├── tests/verify/     # verify-apply modules (sourced by scripts/verify-apply.sh)
+├── scripts/          # see scripts/README.md (lifecycle/, backend/, kind/, checks/, observability/, debug/)
+├── tests/verify/     # verify-apply modules (sourced by scripts/checks/verify-apply.sh)
 └── terraform/
     ├── modules/      # includes eks/
     ├── tfc-bootstrap/
@@ -118,8 +123,11 @@ localstack-infra/
 - LocalStack endpoint: `http://localhost:4566` (dummy creds `test` / `test`)
 - Kind cluster: `testinfra-eks` (kubeconfig under `.kube/`, gitignored)
 - Default state backend is **local**; opt-in `BACKEND=s3` (LocalStack) or `BACKEND=cloud` (TFC)
-- Free-tier hardening: S3 SSE/versioning/lifecycle, SQS SSE+DLQ, EC2 IMDSv2+EBS encrypt, Secrets recovery window, S3 Gateway VPC endpoint, Lambda X-Ray/DLQ/concurrency, API GW access logs+throttle, CW alarms → SNS → **ops alerts SQS** (swap for email/Slack on real AWS), EKS sample HA, Kind↔LocalStack SQS/SNS bridge
-- Drift: `./scripts/check-drift.sh <env>` (also used by `verify-apply.sh` and the scheduled drift-check workflow)
-- Kind cluster: **2 workers** + metrics-server (`./scripts/kind-up.sh`). After changing `kind/cluster.yaml`, recreate with `./scripts/kind-down.sh && ./scripts/kind-up.sh`
+- Free-tier hardening: S3 SSE/versioning/lifecycle, SQS SSE+DLQ, EC2 IMDSv2+EBS encrypt, Secrets recovery window, S3 Gateway VPC endpoint, Lambda X-Ray/DLQ/concurrency, API GW access logs+throttle, CW dashboard+alarms → SNS → **ops alerts SQS**, EKS sample HA, Kind↔LocalStack SQS/SNS bridge
+- Drift: `./scripts/checks/check-drift.sh <env>` (also used by `verify-apply.sh` and the scheduled drift-check workflow)
+- **Observability & debugging (opt-in, local-dev only — not started by `up.sh` or CI):**
+  - `./scripts/observability/observability-up.sh` / `-down.sh` — Grafana OSS `:3000` + Loki + Alloy
+  - `./scripts/debug/portainer-up.sh` / `-down.sh` — Portainer CE `:9000` (import `.kube/kind-config` for Kind)
+- Kind cluster: **2 workers** + metrics-server (`./scripts/kind/kind-up.sh`). After changing `kind/cluster.yaml`, recreate with `./scripts/kind/kind-down.sh && ./scripts/kind/kind-up.sh`
 - **Still not included** on LocalStack free (Pro/paid or real AWS only): Amplify, CloudFront, WAF, RDS, ElastiCache, OpenSearch, ECS, real **NAT Gateway** routing, real **EKS API** / IRSA OIDC validation, Secrets auto-rotation, customer-managed KMS rotation. Kind mirrors EKS instead of calling `aws_eks_*`.
 - If using TFC: workspaces **must** use `execution_mode = "local"`

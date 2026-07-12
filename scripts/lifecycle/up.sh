@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Category: lifecycle
 # Start Kind (EKS backend) then LocalStack.
 #
 # Kind pods reach LocalStack via host.docker.internal → host :4566 (see
@@ -7,7 +8,7 @@
 # often breaks published :4566.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 SKIP_KIND="${SKIP_KIND:-0}"
@@ -18,7 +19,7 @@ CONNECT_LS_TO_KIND="${CONNECT_LS_TO_KIND:-0}"
 
 if [[ "$SKIP_KIND" != "1" ]]; then
   echo "==> Ensuring Kind cluster (LocalStack EKS backend)..."
-  "$ROOT/scripts/kind-up.sh"
+  "$ROOT/scripts/kind/kind-up.sh"
 else
   # CI: start LocalStack alone so shared/network/backend apply without Kind
   # contending for Docker/CPU. Call kind-up.sh later, before the eks stack.
@@ -35,7 +36,7 @@ echo "==> Starting LocalStack (free)..."
 docker compose up -d
 
 echo "==> Waiting for LocalStack health..."
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   if curl -sf http://localhost:4566/_localstack/health >/dev/null 2>&1; then
     echo "LocalStack is healthy."
 

@@ -2,7 +2,7 @@
 # Terraform external data source: IP Kind pods use for LocalStack :4566.
 #
 # Always use LocalStack's address on the Docker `kind` network (idempotent connect).
-# Host Terraform must NOT rely on localhost after that attach on Linux CI — scripts/env.sh
+# Host Terraform must NOT rely on localhost after that attach on Linux CI — scripts/lifecycle/env.sh
 # switches TF_VAR_localstack_endpoint to the container's compose-network IP when needed.
 #
 # stdin: JSON {container_name?}
@@ -18,7 +18,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
-  echo "container '$CONTAINER' not found — run scripts/up.sh first" >&2
+  echo "container '$CONTAINER' not found — run scripts/lifecycle/up.sh first" >&2
   exit 1
 fi
 

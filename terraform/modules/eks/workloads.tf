@@ -1,6 +1,6 @@
 # Sample workload on Kind (mirrors deploying into LocalStack EKS after CreateNodegroup).
 #
-# HPA requires metrics-server (installed by scripts/kind-up.sh with --kubelet-insecure-tls).
+# HPA requires metrics-server (installed by scripts/kind/kind-up.sh with --kubelet-insecure-tls).
 # NetworkPolicy enforcement needs Calico (optional; Kind default kindnet does not enforce
 # policies — skipped to keep CI bring-up stable). See docs/ARCHITECTURE.md.
 

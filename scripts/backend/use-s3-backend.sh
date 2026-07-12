@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
+# Category: backend
 # Opt in to S3 + DynamoDB remote state on LocalStack (free-tier).
 # Bootstraps tfstate-<project>-<env> bucket + tflock-<project>-<env> lock table,
 # then syncs live stacks with BACKEND=s3.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ENV="${1:-staging}"
 APP_NAME="${APP_NAME:-testinfra}"
 ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
@@ -35,8 +36,8 @@ terraform -chdir="$BOOTSTRAP" apply -auto-approve -input=false
 export BACKEND=s3
 export APP_NAME
 export LOCALSTACK_ENDPOINT="$ENDPOINT"
-"$ROOT/scripts/sync-live.sh"
+"$ROOT/scripts/lifecycle/sync-live.sh"
 
-echo "Ready: BACKEND=s3 ./scripts/env.sh $ENV apply"
+echo "Ready: BACKEND=s3 ./scripts/lifecycle/env.sh $ENV apply"
 echo "State bucket: tfstate-${APP_NAME}-${ENV}"
 echo "Lock table:   tflock-${APP_NAME}-${ENV}"

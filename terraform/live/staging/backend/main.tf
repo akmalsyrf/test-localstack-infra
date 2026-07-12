@@ -1,35 +1,22 @@
-# Backend stack — S3 remote state (reads sibling stack state from LocalStack S3).
-# Placeholders tfstate-testinfra-staging / ap-southeast-3 injected by sync-live.sh.
-# Remote-state endpoint uses var.localstack_endpoint (not a baked URL) so Kind
-# attach breaking host :4566 on Linux CI can be fixed via -var / tfvars.
+# Backend stack — local state only (reads sibling terraform.tfstate files).
+# No tfe provider / tfe_outputs (those are in main.tf for BACKEND=cloud).
+#
+# ASG+launch_template self-healing: LocalStack Community implements Auto Scaling
+# APIs, but ALB target-group health-check simulation is incomplete and swapping
+# the single aws_instance for ASG would break existing instance_id verify paths.
+# Kept as a single EC2 instance with IMDSv2 + encrypted root volume instead.
 
 data "terraform_remote_state" "network" {
-  backend = "s3"
+  backend = "local"
   config = {
-    bucket                      = "tfstate-testinfra-staging"
-    key                         = "network/terraform.tfstate"
-    region                      = "ap-southeast-3"
-    endpoint                    = var.localstack_endpoint
-    access_key                  = "test"
-    secret_key                  = "test"
-    skip_credentials_validation = true
-    skip_metadata_api_check     = true
-    force_path_style            = true
+    path = "${path.module}/../network/terraform.tfstate"
   }
 }
 
 data "terraform_remote_state" "shared" {
-  backend = "s3"
+  backend = "local"
   config = {
-    bucket                      = "tfstate-testinfra-staging"
-    key                         = "shared/terraform.tfstate"
-    region                      = "ap-southeast-3"
-    endpoint                    = var.localstack_endpoint
-    access_key                  = "test"
-    secret_key                  = "test"
-    skip_credentials_validation = true
-    skip_metadata_api_check     = true
-    force_path_style            = true
+    path = "${path.module}/../shared/terraform.tfstate"
   }
 }
 
@@ -202,6 +189,84 @@ resource "aws_cloudwatch_metric_alarm" "sqs_depth" {
   }
 }
 
+# Native CloudWatch dashboard — zero runtime footprint (safe in CI).
+# Metrics mirror the existing alarms + API Gateway stage metrics_enabled.
+resource "aws_cloudwatch_dashboard" "main" {
+  dashboard_name = "${local.prefix}-ops"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title  = "EC2 StatusCheckFailed"
+          region = var.aws_region
+          period = 60
+          stat   = "Maximum"
+          metrics = [
+            ["AWS/EC2", "StatusCheckFailed", "InstanceId", aws_instance.backend.id]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title  = "Lambda Errors / Invocations / Duration"
+          region = var.aws_region
+          period = 60
+          metrics = [
+            ["AWS/Lambda", "Errors", "FunctionName", module.lambda_api.lambda_function_name, { stat = "Sum" }],
+            [".", "Invocations", ".", ".", { stat = "Sum" }],
+            [".", "Duration", ".", ".", { stat = "Average", yAxis = "right" }]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title  = "SQS ApproximateNumberOfMessagesVisible"
+          region = var.aws_region
+          period = 60
+          stat   = "Average"
+          metrics = [
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", module.messaging.standard_queue_name],
+            [".", ".", ".", element(split(":", module.messaging.fifo_queue_arn), 5)]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title  = "API Gateway 4XX / 5XX / Latency"
+          region = var.aws_region
+          period = 60
+          metrics = [
+            ["AWS/ApiGateway", "4XXError", "ApiName", "${local.prefix}-api", "Stage", module.lambda_api.api_stage_name, { stat = "Sum" }],
+            [".", "5XXError", ".", ".", ".", ".", { stat = "Sum" }],
+            [".", "Latency", ".", ".", ".", ".", { stat = "Average", yAxis = "right" }]
+          ]
+        }
+      }
+    ]
+  })
+}
+
 output "instance_id" {
   value = aws_instance.backend.id
 }
@@ -256,4 +321,13 @@ output "ops_alerts_topic_arn" {
 
 output "ops_alerts_queue_url" {
   value = aws_sqs_queue.ops_alerts_queue.url
+}
+
+output "dashboard_name" {
+  value = aws_cloudwatch_dashboard.main.dashboard_name
+}
+
+output "dashboard_url" {
+  # Real-AWS console deep link (not usable against LocalStack; kept as migration reference).
+  value = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=${aws_cloudwatch_dashboard.main.dashboard_name}"
 }

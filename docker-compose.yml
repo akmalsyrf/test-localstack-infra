@@ -33,5 +33,21 @@ services:
       retries: 30
       start_period: 10s
 
+  # Optional local-dev only (Compose profile). Not started by scripts/lifecycle/up.sh or CI.
+  # Manage Docker (LocalStack + Kind nodes) and import Kind kubeconfig for K8s.
+  portainer:
+    profiles: ["debug"]
+    image: portainer/portainer-ce:latest
+    container_name: testinfra-portainer
+    command: ["-H", "unix:///var/run/docker.sock"]
+    ports:
+      - "9000:9000"
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+    restart: unless-stopped
+
 volumes:
   localstack-data:
+  portainer-data:

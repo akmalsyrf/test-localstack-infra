@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
+# Category: lifecycle
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ENV="${1:-}"
 ACTION="${2:-apply}" # apply | destroy | plan
 # Optional comma-separated stack filter, e.g. shared,network,backend or eks.
@@ -14,7 +15,7 @@ if [[ -z "$ENV" || ! -d "$ROOT/terraform/live/$ENV" ]]; then
   exit 1
 fi
 
-"$ROOT/scripts/sync-live.sh"
+"$ROOT/scripts/lifecycle/sync-live.sh"
 
 LIVE="$ROOT/terraform/live/$ENV"
 # Apply order: shared → network → backend → eks (EKS needs VPC/subnets + Kind)
@@ -185,7 +186,7 @@ prepare_kind_localstack_bridge() {
     echo "==> Re-syncing S3 live stacks with endpoint $LOCALSTACK_ENDPOINT..."
     BACKEND=s3 LOCALSTACK_ENDPOINT="$LOCALSTACK_ENDPOINT" \
       APP_NAME="${APP_NAME:-testinfra}" \
-      "$ROOT/scripts/sync-live.sh"
+      "$ROOT/scripts/lifecycle/sync-live.sh"
   fi
 }
 
@@ -318,7 +319,7 @@ if uses_tfc_cloud; then
     echo "Or: BACKEND=local $0 $ENV $ACTION" >&2
     exit 1
   fi
-  "$ROOT/scripts/ensure-tfc-local-execution.sh"
+  "$ROOT/scripts/backend/ensure-tfc-local-execution.sh"
 fi
 
 ensure_localstack_endpoint
@@ -333,7 +334,7 @@ if uses_s3_backend; then
   if ! aws --endpoint-url="${LOCALSTACK_ENDPOINT}" \
     --region "${AWS_DEFAULT_REGION}" \
     s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
-    echo "S3 backend bucket missing ($BUCKET). Run: ./scripts/use-s3-backend.sh $ENV" >&2
+    echo "S3 backend bucket missing ($BUCKET). Run: ./scripts/backend/use-s3-backend.sh $ENV" >&2
     exit 1
   fi
 fi
@@ -365,7 +366,7 @@ case "$ACTION" in
     # CI runs verify as a separate step after Kind + eks.
     if [[ -z "$STACK_FILTER" ]]; then
       echo ""
-      "$ROOT/scripts/verify-apply.sh" "$ENV"
+      "$ROOT/scripts/checks/verify-apply.sh" "$ENV"
     fi
     ;;
   destroy)

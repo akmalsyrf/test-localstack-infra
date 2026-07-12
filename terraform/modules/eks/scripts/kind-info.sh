@@ -39,7 +39,7 @@ elif [[ -x "$HOME/.local/bin/kind" ]]; then
 fi
 
 if [[ -z "$KUBECONFIG_PATH" || ! -f "$KUBECONFIG_PATH" ]]; then
-  echo 'kubeconfig missing — run scripts/kind-up.sh' >&2
+  echo 'kubeconfig missing — run scripts/kind/kind-up.sh' >&2
   exit 1
 fi
 
@@ -56,13 +56,13 @@ fi
 # Prefer validating via kubectl (always required). kind CLI is optional if the
 # cluster is already reachable — Terraform's PATH often omits ./bin.
 if ! kubectl "${KC[@]}" cluster-info >/dev/null 2>&1; then
-  echo "cannot reach cluster via kubeconfig ($KUBECONFIG_PATH) — run scripts/kind-up.sh" >&2
+  echo "cannot reach cluster via kubeconfig ($KUBECONFIG_PATH) — run scripts/kind/kind-up.sh" >&2
   exit 1
 fi
 
 if [[ -n "$KIND_BIN" ]]; then
   if ! "$KIND_BIN" get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
-    echo "kind cluster '$CLUSTER_NAME' not found — run scripts/kind-up.sh" >&2
+    echo "kind cluster '$CLUSTER_NAME' not found — run scripts/kind/kind-up.sh" >&2
     exit 1
   fi
 fi

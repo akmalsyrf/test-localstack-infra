@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Category: backend
 # Force all testinfra TFC workspaces (+ project defaults) to execution_mode=local.
 set -euo pipefail
 

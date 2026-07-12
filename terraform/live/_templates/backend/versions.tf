@@ -1,5 +1,5 @@
 # Backend stack — Terraform Cloud remote state + tfe_outputs for cross-stack reads.
-# Workspace name is injected by scripts/sync-live.sh
+# Workspace name is injected by scripts/lifecycle/sync-live.sh
 
 terraform {
   required_version = ">= 1.5.0"

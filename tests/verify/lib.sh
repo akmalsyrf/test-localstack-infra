@@ -1,4 +1,4 @@
-# Shared helpers for verify-apply tests. Sourced by scripts/verify-apply.sh.
+# Shared helpers for verify-apply tests. Sourced by scripts/checks/verify-apply.sh.
 # Expects ROOT, ENV, LIVE, ENDPOINT, REGION, and related globals to be set.
 
 detect_tf_backend() {
@@ -103,7 +103,7 @@ ensure_stacks_ready_for_outputs() {
       sync_s3_backend_endpoints "$ENDPOINT"
       BUCKET="tfstate-testinfra-${ENV}"
       if ! aws_ls s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
-        echo "S3 backend bucket missing ($BUCKET). Run: ./scripts/use-s3-backend.sh $ENV" >&2
+        echo "S3 backend bucket missing ($BUCKET). Run: ./scripts/backend/use-s3-backend.sh $ENV" >&2
         exit 1
       fi
       ;;
